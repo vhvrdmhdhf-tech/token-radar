@@ -15,14 +15,16 @@ each with the steps to farm it.
   global median where a category has few peers) and fits three corrections by least squares — on
   seven-day TVL growth, on log age, and on size. A pre-token protocol is priced as its peers price.
 - **Token odds.** A logistic model over the whole universe (the label is whether a protocol records a
-  token) on log TVL, log age, growth and the category's token record.
+  token) on log TVL, log age, growth, the category's token record, how many chains it runs on, and
+  whether one of them is Ethereum. The model view also prints its held-out calibration, band by band.
 - **Expected value** = launch value × token odds is the board's ranking.
 
 The fit is validated out of sample: the live set is split in two by protocol, each half is priced by a
 model fitted only on the other half, and the dashboard's model card prints the held-out error (on the
-sealed snapshot: median ×3.69, odds AUC 0.71). The board covers the whole watchlist and adds the 160
+sealed snapshot: median ×3.42, odds AUC 0.74). The board covers the whole watchlist and adds the 160
 largest pre-token protocols below its floor — 200 rows, each with a six-step farm plan whose costs and
-durations come from the protocol's own category, chains, TVL and age.
+durations come from the protocol's own category, chains, TVL and age. Each protocol's detail view
+shows the full pricing waterfall and the live peers its price rests on.
 
 ## Run it
 
