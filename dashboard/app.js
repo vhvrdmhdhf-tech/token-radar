@@ -221,18 +221,26 @@ $('model-body').innerHTML = `
       <div class="fact"><span class="k">Comparables — held-out median error</span><span class="v">×${mc.comps_median_error_x}</span></div>
       <div class="fact"><span class="k">50 / 50 blend — held-out median error</span><span class="v">×${mc.blend_median_error_x}</span></div>
       <div class="fact"><span class="k">Within 2× of the real cap — comparables / regression</span><span class="v">${mc.comps_within_2x_pct}% / ${mc.holdout_within_2x_pct}%</span></div>
+      <div class="fact"><span class="k">Regression — median error, 20 repeated splits</span><span class="v">×${mc.value_error_repeated_median_x} (middle half ×${mc.value_error_repeated_q1_x}–×${mc.value_error_repeated_q3_x})</span></div>
       <p>The comparables land within 2× more often, but their misses are larger, and every blend tested
       priced the held-out half worse than the regression alone. So the point estimate stays with the
       regression, and the comparables carry what they are best at: named evidence and an honest range.
-      The model card prints the figures either way — the choice is reported, not hidden.</p>
+      The regression itself was re-challenged on the repeated splits — gradient-boosted trees,
+      median-loss fits and re-tuned shrinkage all priced them worse — and stayed. The model card
+      prints the figures either way — the choice is reported, not hidden.</p>
     </div>
     <div class="card">
       <h3>3 · Token odds and readiness tiers</h3>
       <p>A logistic model fitted on all ${mc.universe} protocols — the label is simply whether a protocol
-      records a token — over six readings of each protocol: log TVL, log age, seven-day growth, its
-      category's token record, how many chains it runs on, and whether one of them is Ethereum. Across
+      records a token — over eight readings of each protocol: log TVL, log age, seven-day growth, its
+      category's token record, how many chains it runs on, whether one of them is Ethereum, whether one
+      of them is Solana, and whether the snapshot records no start date for it. Across
       the whole universe ${mc.base_rate_pct}% of protocols have a token; the fit separates the ones that
-      list from the ones that do not with a held-out AUC of ${mc.odds_auc}. Readiness nudges those odds
+      list from the ones that do not with a held-out AUC of ${mc.odds_auc}. On twenty repeated random
+      splits of the universe its median AUC is ${mc.odds_auc_repeated_median} (middle half
+      ${mc.odds_auc_repeated_q1}–${mc.odds_auc_repeated_q3}), and the two newest readings earned their
+      place on those splits: the six-reading fit they extend scored lower on every one of the twenty.
+      Readiness nudges those odds
       by the protocol's own seven-day TVL momentum and sorts the board into three tiers — Imminent
       (50%+), Emerging (30–50%) and Early (under 30%) — so a reader farms in launch order, not just
       value order.</p>
