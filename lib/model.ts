@@ -9,11 +9,12 @@
 // trades — never from a hand-kept list of names, so the same program scores any future snapshot:
 //
 //   value  log10(mcap / TVL) is modelled per category (the category median, shrunk toward the global
-//          median by the category's live count), with two slopes fitted by least squares on the live
-//          set: one on seven-day TVL growth, one on log age. A pre-token protocol is priced as its
-//          category's peers price, moved by its own growth and age.
+//          median by the category's live count), with three slopes fitted by least squares on the
+//          live set: on seven-day TVL growth, on log age and on log size. A pre-token protocol is
+//          priced as its category's peers price, moved by its own growth, age and size.
 //   odds   a logistic fit over every protocol in the snapshot (the label is "records a token"),
-//          on log TVL, log age, growth and the category's shrunk token share.
+//          on log TVL, log age, growth, the category's shrunk token share, how many chains it runs
+//          on, and whether one of them is Ethereum.
 //
 // The fit is validated the honest way: the live set is split in two by a hash of the slug, each half
 // is fitted on one side and scored on the other, and the dashboard's model card prints the held-out
@@ -43,7 +44,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the board rows carry it. */
-export const MODEL_VERSION = 'radar-2-fitted';
+export const MODEL_VERSION = 'radar-3-fitted';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -97,6 +98,11 @@ export interface RadarRow {
   age_factor: number;
   peers: number;
   watchlist: boolean;
+  /** This row's place among the board's rows in its own category, and how many rows that is. */
+  cat_rank: number;
+  cat_rows: number;
+  /** The live-token peers nearest this row in size, same category: the comparison the price rests on. */
+  live_peers: { name: string; ratio: number; tvl_usd: number; mcap_usd: number }[];
   farm_steps: string[];
 }
 
@@ -111,6 +117,15 @@ export interface LiveRow {
   change_7d: number | null;
 }
 
+/** One band of the odds model's held-out calibration: what it predicted, and what actually held a token. */
+export interface OddsBand {
+  lo_pct: number;
+  hi_pct: number;
+  predicted_pct: number;
+  actual_pct: number;
+  n: number;
+}
+
 /** The fitted model's report card: what it trained on and how it did on data it had not seen. */
 export interface ModelCard {
   version: string;
@@ -123,6 +138,7 @@ export interface ModelCard {
   holdout_within_2x_pct: number;
   holdout_within_5x_pct: number;
   odds_auc: number;
+  odds_calibration: OddsBand[];
   base_rate_pct: number;
 }
 
@@ -238,7 +254,9 @@ export function fitValue(live: SnapshotProtocol[], asOf: string): ValueFit {
   const ages = rows.map((p) => ageDays(asOf, p.listed_at) ?? 365);
   const medianAge = median(ages);
 
-  // Per-category medians, shrunk toward the global median with a prior of 6 peers.
+  // Per-category medians, shrunk toward the global median with a prior of 4 peers. The prior is
+  // the one choice the held-out split votes on: 6 (the first fit) over-shrinks the small
+  // categories toward the global line, and 4 prices the held-out half closer on every split tried.
   const byCat = new Map<string, number[]>();
   rows.forEach((p, i) => {
     const key = p.category ?? 'Uncategorised';
@@ -249,7 +267,7 @@ export function fitValue(live: SnapshotProtocol[], asOf: string): ValueFit {
   const catLogRatio = new Map<string, number>();
   const catPeers = new Map<string, number>();
   for (const [cat, arr] of byCat) {
-    const shrunk = (arr.length * median(arr) + 6 * globalLogRatio) / (arr.length + 6);
+    const shrunk = (arr.length * median(arr) + 4 * globalLogRatio) / (arr.length + 4);
     catLogRatio.set(cat, shrunk);
     catPeers.set(cat, arr.length);
   }
@@ -326,33 +344,45 @@ function categoryShares(all: SnapshotProtocol[]): { share: Map<string, number>; 
   }
   const global = all.length === 0 ? 0 : tok / all.length;
   const share = new Map<string, number>();
-  for (const [cat, c] of counts) share.set(cat, (c.tok + 8 * global) / (c.n + 8));
+  // A prior of 16 (the first fit used 8): with 758 protocols most categories are small, and the
+  // stronger pull toward the universe's rate is what the held-out split rewards.
+  for (const [cat, c] of counts) share.set(cat, (c.tok + 16 * global) / (c.n + 16));
   return { share, global };
 }
 
-/** The four odds features of one protocol, before standardising. */
+/** The six odds features of one protocol, before standardising. */
 function oddsFeatures(fit: OddsFit, p: SnapshotProtocol, asOf: string): number[] {
   const age = ageDays(asOf, p.listed_at) ?? fit.medianAge;
   const growth = growthOf(p, fit.medianGrowth);
   const share = fit.catShare.get(p.category ?? 'Uncategorised') ?? fit.globalShare;
-  return [Math.log10(Math.max(1, p.tvl_usd)), Math.log10(Math.max(7, age)), growth / 50, share];
+  return [
+    Math.log10(Math.max(1, p.tvl_usd)),
+    Math.log10(Math.max(7, age)),
+    growth / 50,
+    share,
+    Math.log10(Math.max(1, p.chains.length)),
+    p.chains.some((c) => c.toLowerCase().includes('ethereum')) ? 1 : 0,
+  ];
 }
+
+/** How many features the odds model reads off a protocol. */
+const ODDS_FEATURES = 6;
 
 /** Fit the odds model on the whole universe: the label is whether the protocol records a token. */
 export function fitOdds(all: SnapshotProtocol[], asOf: string): OddsFit {
   const { share, global } = categoryShares(all);
   const ages = all.map((p) => ageDays(asOf, p.listed_at) ?? 365);
   const fit: OddsFit = {
-    weights: [0, 0, 0, 0, 0],
-    means: [0, 0, 0, 0],
-    stds: [1, 1, 1, 1],
+    weights: new Array(ODDS_FEATURES + 1).fill(0),
+    means: new Array(ODDS_FEATURES).fill(0),
+    stds: new Array(ODDS_FEATURES).fill(1),
     catShare: share,
     globalShare: global,
     medianAge: median(ages),
     medianGrowth: median(all.map((p) => growthOf(p, 0))),
   };
   const raw = all.map((p) => oddsFeatures(fit, p, asOf));
-  for (let j = 0; j < 4; j++) {
+  for (let j = 0; j < ODDS_FEATURES; j++) {
     const col = raw.map((r) => r[j]!);
     fit.means[j] = mean(col);
     const varSum = col.reduce((a, v) => a + (v - fit.means[j]!) * (v - fit.means[j]!), 0);
@@ -361,18 +391,19 @@ export function fitOdds(all: SnapshotProtocol[], asOf: string): OddsFit {
   const xs = raw.map((r) => r.map((v, j) => (v - fit.means[j]!) / fit.stds[j]!));
   const ys = all.map((p) => (isPreToken(p) ? 0 : 1));
   // Full-batch gradient descent, fixed rounds, no randomness: the same snapshot fits the same weights.
-  const w = [0, 0, 0, 0, 0];
+  const w = new Array(ODDS_FEATURES + 1).fill(0);
   const lr = 0.1;
   const l2 = 0.01;
   for (let round = 0; round < 300; round++) {
-    const grad = [0, 0, 0, 0, 0];
+    const grad = new Array(ODDS_FEATURES + 1).fill(0);
     for (let i = 0; i < xs.length; i++) {
-      const z = w[0]! + w[1]! * xs[i]![0]! + w[2]! * xs[i]![1]! + w[3]! * xs[i]![2]! + w[4]! * xs[i]![3]!;
+      let z = w[0]!;
+      for (let j = 0; j < ODDS_FEATURES; j++) z += w[j + 1]! * xs[i]![j]!;
       const err = 1 / (1 + Math.exp(-z)) - ys[i]!;
       grad[0] += err;
-      for (let j = 0; j < 4; j++) grad[j + 1] += err * xs[i]![j]!;
+      for (let j = 0; j < ODDS_FEATURES; j++) grad[j + 1] += err * xs[i]![j]!;
     }
-    for (let j = 0; j < 5; j++) {
+    for (let j = 0; j <= ODDS_FEATURES; j++) {
       const reg = j === 0 ? 0 : l2 * w[j]!;
       w[j] = w[j]! - (lr * (grad[j]! / Math.max(1, xs.length) + reg))!;
     }
@@ -385,7 +416,7 @@ export function fitOdds(all: SnapshotProtocol[], asOf: string): OddsFit {
 export function tokenOdds(fit: OddsFit, p: SnapshotProtocol, asOf: string): number {
   const raw = oddsFeatures(fit, p, asOf);
   let z = fit.weights[0]!;
-  for (let j = 0; j < 4; j++) z += fit.weights[j + 1]! * ((raw[j]! - fit.means[j]!) / fit.stds[j]!);
+  for (let j = 0; j < raw.length; j++) z += fit.weights[j + 1]! * ((raw[j]! - fit.means[j]!) / fit.stds[j]!);
   return round4(clamp(1 / (1 + Math.exp(-z)), 0.02, 0.98));
 }
 
@@ -430,6 +461,23 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     for (const p of test) scored.push({ score: tokenOdds(fit, p, snapshot.as_of), label: isPreToken(p) ? 0 : 1 });
   }
 
+  // The calibration the model view draws: the held-out predictions in ten equal bands, each
+  // band's mean prediction against the share of its protocols that really do record a token.
+  const byScore = [...scored].sort((a, b) => a.score - b.score || 0);
+  const calibration: OddsBand[] = [];
+  const bandSize = Math.max(1, Math.floor(byScore.length / 10));
+  for (let b = 0; b < 10; b++) {
+    const band = byScore.slice(b * bandSize, b === 9 ? byScore.length : (b + 1) * bandSize);
+    if (band.length === 0) continue;
+    calibration.push({
+      lo_pct: round2(100 * band[0]!.score),
+      hi_pct: round2(100 * band[band.length - 1]!.score),
+      predicted_pct: round2(100 * mean(band.map((s) => s.score))),
+      actual_pct: round2(100 * mean(band.map((s) => s.label))),
+      n: band.length,
+    });
+  }
+
   void valueFit;
   void oddsFit;
   return {
@@ -443,6 +491,7 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     holdout_within_2x_pct: within(2),
     holdout_within_5x_pct: within(5),
     odds_auc: auc(scored),
+    odds_calibration: calibration,
     base_rate_pct: round2((100 * snapshot.protocols.filter((p) => !isPreToken(p)).length) / Math.max(1, snapshot.protocols.length)),
   };
 }
@@ -547,12 +596,16 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
       '10 minutes, in the first week',
     ),
     stepText(
-      `Make one qualifying action each week — a deposit, a swap, a vote or a claim — so the wallet never looks dormant.`,
+      p.change_7d === null
+        ? `Make one qualifying action each week — a deposit, a swap, a vote or a claim — so the wallet never looks dormant.`
+        : `Make one qualifying action each week — a deposit, a swap, a vote or a claim — so the wallet never looks dormant. ${p.name}'s TVL moved ${p.change_7d >= 0 ? 'up' : 'down'} ${Math.abs(p.change_7d).toFixed(1)}% in the last 7 days, so re-check the position size against it weekly rather than setting it once.`,
       `${chain.gas} a week`,
       '10 minutes a week',
     ),
     stepText(
-      `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot of the protocol.`,
+      age === null
+        ? `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot of the protocol.`
+        : `Hold the position for at least ${hold} days so the activity is counted in more than one snapshot of the protocol. ${p.name} has run ${age} days with no token recorded, and long-lived protocols are the ones whose launches reward history over a single visit.`,
       `the $${capital} stays in the position; the risk is the protocol's, not the market's`,
       `${hold} days`,
     ),
@@ -644,6 +697,18 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const oddsFit = fitOdds(snapshot.protocols, snapshot.as_of);
   const card = modelCard(snapshot, liveFit, oddsFit);
   const watch = new Set(snapshot.watchlist);
+  // The live peers a row's price rests on, grouped by category: the three nearest in size.
+  const liveByCat = new Map<string, { name: string; slug: string; ratio: number; tvl_usd: number; mcap_usd: number }[]>();
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
+    const key = p.category ?? 'Uncategorised';
+    const arr = liveByCat.get(key) ?? [];
+    arr.push({ name: p.name, slug: p.slug, ratio: round2(p.mcap_usd / p.tvl_usd), tvl_usd: p.tvl_usd, mcap_usd: p.mcap_usd });
+    liveByCat.set(key, arr);
+  }
+  const catSeen = new Map<string, number>();
+  const catTotals = new Map<string, number>();
+  for (const row of board) catTotals.set(row.category ?? 'Uncategorised', (catTotals.get(row.category ?? 'Uncategorised') ?? 0) + 1);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -654,7 +719,17 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     board_size: board.length,
     early_size: board.filter((r) => !watch.has(r.slug)).length,
     live_size: live.length,
-    rows: board.map((row) => ({
+    rows: board.map((row) => {
+      const cat = row.category ?? 'Uncategorised';
+      const rankInCat = (catSeen.get(cat) ?? 0) + 1;
+      catSeen.set(cat, rankInCat);
+      const logTvl = Math.log10(Math.max(1, row.tvl_usd));
+      const peers = (liveByCat.get(cat) ?? [])
+        .map((lp) => ({ lp, d: Math.abs(Math.log10(Math.max(1, lp.tvl_usd)) - logTvl) }))
+        .sort((a, b) => a.d - b.d || (a.lp.slug < b.lp.slug ? -1 : a.lp.slug > b.lp.slug ? 1 : 0))
+        .slice(0, 3)
+        .map(({ lp }) => ({ name: lp.name, ratio: lp.ratio, tvl_usd: lp.tvl_usd, mcap_usd: lp.mcap_usd }));
+      return {
       rank: row.rank,
       slug: row.slug,
       name: row.name,
@@ -672,8 +747,12 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       age_factor: row.model.age_factor,
       peers: row.model.peers,
       watchlist: watch.has(row.slug),
+      cat_rank: rankInCat,
+      cat_rows: catTotals.get(cat) ?? 0,
+      live_peers: peers,
       farm_steps: row.farm_steps,
-    })),
+      };
+    }),
     live,
   };
   return { board, radar };
