@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Token Launch Radar — every pre-token protocol, ranked by expected launch value</title>
+<title>Token Launch Radar — every pre-token protocol, priced against its live comparables</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -12,7 +12,7 @@
     <svg class="mark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" stroke-width="2" opacity=".45"/><circle cx="20" cy="20" r="10.5" fill="none" stroke="currentColor" stroke-width="2" opacity=".7"/><circle cx="20" cy="20" r="3.4" fill="currentColor"/><path d="M20 20 L33 9" stroke="currentColor" stroke-width="2.4"/><circle cx="29.5" cy="13.5" r="2.2" fill="currentColor"/></svg>
     <div>
       <h1>Token Launch Radar</h1>
-      <p class="tagline">Every protocol with no token yet, ranked by what its launch would be worth — and how to farm it.</p>
+      <p class="tagline">Every protocol with no token yet, priced against the live protocols most like it — with a range, a readiness tier, and a costed farm plan.</p>
     </div>
   </div>
   <div class="stamp" id="stamp"></div>
@@ -20,9 +20,11 @@
 
 <section class="kpis" id="kpis"></section>
 
+<section class="tiers" id="tiers" aria-label="Readiness tiers"></section>
+
 <nav class="views" aria-label="Views">
   <button class="view-btn is-on" data-view="board" type="button">The board</button>
-  <button class="view-btn" data-view="model" type="button">How the model works</button>
+  <button class="view-btn" data-view="model" type="button">How the radar works</button>
   <button class="view-btn" data-view="live" type="button">Already trading</button>
 </nav>
 
@@ -35,6 +37,7 @@
       <label class="ctl">Sort by
         <select id="f-sort">
           <option value="rank">Expected value</option>
+          <option value="readiness">Launch readiness</option>
           <option value="fdv">Launch value (FDV)</option>
           <option value="odds">Token odds</option>
           <option value="tvl">TVL</option>
@@ -45,12 +48,18 @@
       <label class="ctl check"><input id="f-watch" type="checkbox"> Watchlist only</label>
       <span class="count" id="count"></span>
     </div>
+    <div class="tier-filter" id="tier-filter" role="group" aria-label="Filter by tier">
+      <button type="button" data-tier="" class="chip is-on">All tiers</button>
+      <button type="button" data-tier="imminent" class="chip">Imminent</button>
+      <button type="button" data-tier="emerging" class="chip">Emerging</button>
+      <button type="button" data-tier="early" class="chip">Early</button>
+    </div>
     <div class="table-wrap">
       <table id="board">
         <thead><tr>
           <th class="num">#</th><th>Protocol</th><th>Category</th><th>Chains</th>
           <th class="num">TVL</th><th class="num">7d</th><th class="num">Launch value</th>
-          <th>Token odds</th><th class="num">Expected value</th>
+          <th>Range (bear – bull)</th><th>Token odds</th><th class="num">Expected value</th>
         </tr></thead>
         <tbody id="board-body"></tbody>
       </table>
@@ -68,9 +77,9 @@
   </section>
 
   <section id="view-live" hidden>
-    <p class="lede">These protocols already have a token. The radar never ranks them — it learns from them.
-    Their market caps are the training set: the model reads what the market pays for a dollar of TVL in
-    each category, then prices the protocols still to launch. Shown by market cap.</p>
+    <p class="lede">These protocols already have a token. The radar never ranks them — it prices against them.
+    Their market caps are the evidence: each is a comparable a pre-token protocol can be matched to, and
+    together they are the training set for the value model. Shown by market cap.</p>
     <div class="table-wrap">
       <table id="live-table">
         <thead><tr><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th><th class="num">7d</th></tr></thead>
@@ -82,8 +91,9 @@
 
 <footer>
   <p>Built by a program from one sealed snapshot of the protocol universe. No figure is typed in by hand:
-  the model refits itself on the snapshot every run, so the same program scores the next snapshot too.
-  Implied values are model estimates, not prices, and nothing here is financial advice.</p>
+  the comparables, the models and the tiers are all refitted on the snapshot every run, so the same
+  program scores the next snapshot too. Implied values are model estimates with a stated range, not
+  prices, and nothing here is financial advice.</p>
 </footer>
 
 <script src="../data.js"></script>
