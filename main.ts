@@ -1,10 +1,12 @@
 // The token launch radar (Node 22, standard library only).
 //
-// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), fits the
-// model in lib/model.ts on the snapshot's own live-token protocols, ranks every pre-token protocol by
-// expected launch value, writes the board to /output/board.json, writes the dashboard's data beside
-// the page, copies this repository's dashboard/ and screenshots/ to /output, and writes
-// /output/dossier.json with the vendored make.fun library — the summary the judge reads.
+// The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), and
+// lib/model.ts does the radar's work on it: every pre-token protocol is matched to its nearest
+// live comparables, priced by a regression the comparables cross-check (their spread is the
+// row's bear-to-bull range), tiered by launch readiness, and given a costed farm plan. The
+// program writes the board to /output/board.json, the dashboard's data beside the page, copies
+// this repository's dashboard/ and screenshots/ to /output, and writes /output/dossier.json
+// with the vendored make.fun library — the summary the judge reads.
 //
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts --input ../input/snapshot.json
