@@ -19,11 +19,18 @@
 //
 // The model card prints both held-out median errors and the blends between them: on this snapshot
 // every blend is worse than the regression alone, so the point estimate stays with the regression
-// and the comps carry the evidence and the range — the card says so, with the numbers. The odds
-// half is unchanged: a logistic fit over every protocol in the snapshot (the label is "records a
-// token"). Rows are also tiered by launch readiness — token odds nudged by seven-day TVL
-// momentum — and each farm plan is costed: cash committed, an expected reward under a stated
-// distribution assumption, and the multiple between them.
+// and the comps carry the evidence and the range — the card says so, with the numbers.
+//
+// Version 4 widens the odds half and hardens the validation. The logistic fit gains two readings
+// of each protocol — whether one of its chains is Solana, and whether the snapshot records no
+// start date for it. On twenty repeated random half-splits of the universe the two extra readings
+// separate listers from non-listers better than the six-reading fit on every single split in
+// paired testing, so they stay; the card prints the new fit's repeated-split median beside the
+// slug-split figure. The value half was re-challenged at the same time —
+// gradient-boosted trees, median-loss variants, blends and re-tuned shrinkage all priced the
+// repeated splits worse than the regression — so it is unchanged, and the card now prints the
+// repeated-split medians beside the slug-split figures for both halves, so no number on it rests
+// on one lucky split.
 //
 // Every figure derives from the snapshot's own as_of date, so two runs write the same bytes.
 
@@ -51,7 +58,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the board rows carry it. */
-export const MODEL_VERSION = 'radar-4-comps';
+export const MODEL_VERSION = 'radar-5-odds8';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -213,6 +220,15 @@ export interface ModelCard {
   /** A 50/50 log blend of the two estimators, same split: worse than the regression alone here. */
   blend_median_error_x: number;
   odds_auc: number;
+  /** The value model on twenty repeated random half-splits of the live set: the median of the
+   * per-split median errors, and the middle half of those medians (first and third quartiles). */
+  value_error_repeated_median_x: number;
+  value_error_repeated_q1_x: number;
+  value_error_repeated_q3_x: number;
+  /** The odds model on twenty repeated random half-splits of the universe, the same summary. */
+  odds_auc_repeated_median: number;
+  odds_auc_repeated_q1: number;
+  odds_auc_repeated_q3: number;
   odds_calibration: OddsBand[];
   base_rate_pct: number;
 }
@@ -556,7 +572,7 @@ function categoryShares(all: SnapshotProtocol[]): { share: Map<string, number>; 
   return { share, global };
 }
 
-/** The six odds features of one protocol, before standardising. */
+/** The eight odds features of one protocol, before standardising. */
 function oddsFeatures(fit: OddsFit, p: SnapshotProtocol, asOf: string): number[] {
   const age = ageDays(asOf, p.listed_at) ?? fit.medianAge;
   const growth = growthOf(p, fit.medianGrowth);
@@ -568,11 +584,16 @@ function oddsFeatures(fit: OddsFit, p: SnapshotProtocol, asOf: string): number[]
     share,
     Math.log10(Math.max(1, p.chains.length)),
     p.chains.some((c) => c.toLowerCase().includes('ethereum')) ? 1 : 0,
+    // Two readings the repeated splits voted for: a Solana deployment is its own launch culture,
+    // and a protocol DefiLlama never recorded a start date for is a different record from one it
+    // has tracked since a known day — the missing date is itself a reading, not just a gap.
+    p.chains.some((c) => c.toLowerCase().includes('solana')) ? 1 : 0,
+    p.listed_at === null ? 1 : 0,
   ];
 }
 
 /** How many features the odds model reads off a protocol. */
-const ODDS_FEATURES = 6;
+const ODDS_FEATURES = 8;
 
 /** Fit the odds model on the whole universe: the label is whether the protocol records a token. */
 export function fitOdds(all: SnapshotProtocol[], asOf: string): OddsFit {
@@ -675,6 +696,66 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     for (const p of test) scored.push({ score: tokenOdds(fit, p, snapshot.as_of), label: isPreToken(p) ? 0 : 1 });
   }
 
+  // The repeated-split summary: twenty random half-splits of each set, cross-fitted both ways,
+  // summarised by the median of the per-split figures and their middle half. One split can be
+  // lucky; twenty draws of the same split cannot all be. The shuffle is a seeded mulberry32, so
+  // the same snapshot draws the same splits — and writes the same card — on every run.
+  const mulberry32 = (seed: number): (() => number) => {
+    let a = seed >>> 0;
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0;
+      let t = a;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  };
+  const shuffledIdx = (n: number, seed: number): number[] => {
+    const idx = Array.from({ length: n }, (_, i) => i);
+    const rand = mulberry32(seed);
+    for (let i = n - 1; i > 0; i--) {
+      const j = Math.floor(rand() * (i + 1));
+      const tmp = idx[i]!;
+      idx[i] = idx[j]!;
+      idx[j] = tmp;
+    }
+    return idx;
+  };
+  const quartileOf = (xs: number[], q: 1 | 3): number => {
+    const s = [...xs].sort((a, b) => a - b);
+    return s[Math.floor((q * s.length) / 4)]!;
+  };
+  const REPEATS = 20;
+  const valueSplitErrors: number[] = [];
+  for (let r = 0; r < REPEATS; r++) {
+    const idx = shuffledIdx(live.length, 20261122 + r);
+    const half = Math.floor(idx.length / 2);
+    const errs: number[] = [];
+    for (const [tr, te] of [[idx.slice(0, half), idx.slice(half)], [idx.slice(half), idx.slice(0, half)]] as const) {
+      const fit = fitValue(tr.map((i) => live[i]!), snapshot.as_of);
+      for (const i of te) {
+        const p = live[i]!;
+        errs.push(Math.abs(Math.log10(priceProtocol(fit, p, snapshot.as_of).fdv / p.mcap_usd!)));
+      }
+    }
+    valueSplitErrors.push(Math.pow(10, median(errs)));
+  }
+  const oddsSplitAucs: number[] = [];
+  const universe = snapshot.protocols;
+  for (let r = 0; r < REPEATS; r++) {
+    const idx = shuffledIdx(universe.length, 20261122 + 5000 + r);
+    const half = Math.floor(idx.length / 2);
+    const splitScored: { score: number; label: number }[] = [];
+    for (const [tr, te] of [[idx.slice(0, half), idx.slice(half)], [idx.slice(half), idx.slice(0, half)]] as const) {
+      const fit = fitOdds(tr.map((i) => universe[i]!), snapshot.as_of);
+      for (const i of te) {
+        const p = universe[i]!;
+        splitScored.push({ score: tokenOdds(fit, p, snapshot.as_of), label: isPreToken(p) ? 0 : 1 });
+      }
+    }
+    oddsSplitAucs.push(auc(splitScored));
+  }
+
   // The calibration the model view draws: the held-out predictions in ten equal bands, each
   // band's mean prediction against the share of its protocols that really do record a token.
   const byScore = [...scored].sort((a, b) => a.score - b.score || 0);
@@ -708,6 +789,12 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     comps_within_2x_pct: compsWithin(2),
     blend_median_error_x: round2(Math.pow(10, median(blendErrors))),
     odds_auc: auc(scored),
+    value_error_repeated_median_x: round2(median(valueSplitErrors)),
+    value_error_repeated_q1_x: round2(quartileOf(valueSplitErrors, 1)),
+    value_error_repeated_q3_x: round2(quartileOf(valueSplitErrors, 3)),
+    odds_auc_repeated_median: round4(median(oddsSplitAucs)),
+    odds_auc_repeated_q1: round4(quartileOf(oddsSplitAucs, 1)),
+    odds_auc_repeated_q3: round4(quartileOf(oddsSplitAucs, 3)),
     odds_calibration: calibration,
     base_rate_pct: round2((100 * snapshot.protocols.filter((p) => !isPreToken(p)).length) / Math.max(1, snapshot.protocols.length)),
   };
