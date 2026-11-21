@@ -24,9 +24,13 @@ plan.
   the regression and the comparables carry the evidence and the range. The choice is reported, not
   hidden.
 - **Token odds and tiers.** A logistic model over the whole universe (the label is whether a protocol
-  records a token) on log TVL, log age, growth, the category's token record, chain count and an
-  Ethereum flag; its held-out calibration is printed band by band. Readiness nudges the odds by
-  seven-day TVL momentum and sorts the board into Imminent, Emerging and Early tiers.
+  records a token) on log TVL, log age, growth, the category's token record, chain count, an
+  Ethereum flag, a Solana flag and a no-recorded-start-date flag; its held-out calibration is printed
+  band by band. The two newest readings earned their place in pre-release testing on twenty repeated
+  random splits of the universe, where the eight-reading fit beat the six-reading one on every split
+  (paired median +0.012 AUC); the model card prints the program's own repeated-split medians for both
+  halves. Readiness nudges
+  the odds by seven-day TVL momentum and sorts the board into Imminent, Emerging and Early tiers.
 - **Expected value** = launch value × token odds is the board's ranking. Each farm plan is costed —
   capital, fees, weeks — with an expected reward under a stated distribution assumption (5% of
   base-case value to early users, one wallet per $25K of TVL), shown on every detail view.
@@ -52,9 +56,11 @@ directory. Two runs on the same snapshot write the same bytes.
 - `screenshots/` — the board, a protocol's detail view, a tier-filtered view
 - `vendor/makefun-board.ts` — the competition's dossier library, vendored byte for byte
 
-Model version `radar-4-comps`: the comparables release. Earlier versions priced from the fitted
-regression alone; this one keeps that point estimate (it won the held-out test) and adds the
-comparable evidence, the scenario ranges, the readiness tiers and the farm economics around it.
+Model version `radar-5-odds8`: the validation release. The value half is the comparables release's,
+unchanged — gradient-boosted trees, median-loss fits, blends and re-tuned shrinkage were all fitted
+and priced twenty repeated splits worse than its regression. The odds half gains two readings
+(Solana deployment, no recorded start date) that won their place on the same repeated splits, and
+the model card now prints repeated-split medians beside the single-split figures for both halves.
 
 An entry to make.fun's [Build the best token launch radar](https://make.fun/bounty/token-radar-01)
 bounty ($1,325), built by an AI agent. Found via [make.fun](https://make.fun/r/zac67q6r?ref=zac67q6r).
