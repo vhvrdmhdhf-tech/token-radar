@@ -18,6 +18,7 @@ $('kpis').innerHTML = [
   [usd(totalValue), 'total expected launch value'],
   [mc.live_peers, 'live peers the model fitted on'],
   [`×${mc.holdout_median_error_x}`, 'held-out pricing error (median)'],
+  [mc.odds_auc, 'token-odds AUC, held out'],
 ].map(([v, k]) => `<div class="kpi"><div class="v">${v}</div><div class="k">${k}</div></div>`).join('');
 
 /* Board */
@@ -70,6 +71,20 @@ function showDetail(slug) {
   const r = R.rows.find((x) => x.slug === slug);
   if (!r) return;
   const age = r.age_days === null ? 'not recorded' : r.age_days >= 365 ? `${(r.age_days / 365).toFixed(1)} years` : `${r.age_days} days`;
+  const base = r.tvl_usd * r.peer_ratio;
+  const grown = base * r.growth_factor;
+  const wf = [
+    ['TVL today', usd(r.tvl_usd), 'the protocol\'s own figure from the snapshot'],
+    [`× peer ratio ${r.peer_ratio}`, usd(base), `what the market pays per TVL dollar in ${r.category ?? 'its category'} (${r.peers} live peers)`],
+    [`× growth factor ${r.growth_factor}`, usd(grown), 'its seven-day TVL trend, against the live set\'s'],
+    [`× age & size factor ${r.age_factor}`, usd(r.fdv_usd), 'how long it has run with no token, and its size'],
+    [`× token odds ${pct(r.token_odds)}`, usd(r.implied_value_usd), 'the fitted chance a protocol like this ever lists'],
+  ];
+  const peerRows = r.live_peers.length === 0
+    ? '<p class="note">No live-token protocol in this category is near it in size; the price leans on the shrunk category median and the global line.</p>'
+    : `<table class="mini"><thead><tr><th>Live peer</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th></tr></thead><tbody>${
+        r.live_peers.map((p) => `<tr><td>${esc(p.name)}</td><td class="num">${usd(p.tvl_usd)}</td><td class="num">${usd(p.mcap_usd)}</td><td class="num">×${p.ratio}</td></tr>`).join('')
+      }</tbody></table>`;
   $('detail').innerHTML = `
     <div class="detail-head">
       <h2>#${r.rank} ${esc(r.name)}</h2>
@@ -83,17 +98,21 @@ function showDetail(slug) {
         <div class="fact"><span class="k">TVL change, 7 days</span><span class="v">${r.change_7d === null ? '—' : `${r.change_7d.toFixed(1)}%`}</span></div>
         <div class="fact"><span class="k">Running with no token for</span><span class="v">${age}</span></div>
         <div class="fact"><span class="k">First tracked</span><span class="v">${esc(r.listed_at ?? '—')}</span></div>
-        <div class="fact"><span class="k">Token</span><span class="v">none yet</span></div>
+        <div class="fact"><span class="k">Place in its category on this board</span><span class="v">#${r.cat_rank} of ${r.cat_rows}</span></div>
+        <div class="fact"><span class="k">Token</span><span class="v">none recorded yet</span></div>
       </div>
       <div class="card">
         <h3>How the radar prices it</h3>
         <div class="formula">expected value = launch value × token odds</div>
-        <div class="fact"><span class="k">Peer ratio (cap/TVL, ${esc(r.category ?? 'category')}, ${r.peers} live peers)</span><span class="v">×${r.peer_ratio}</span></div>
-        <div class="fact"><span class="k">Growth factor (its 7d TVL trend)</span><span class="v">×${r.growth_factor}</span></div>
-        <div class="fact"><span class="k">Age &amp; size factor</span><span class="v">×${r.age_factor}</span></div>
-        <div class="fact"><span class="k">Launch value if it lists (FDV)</span><span class="v">${usd(r.fdv_usd)}</span></div>
-        <div class="fact"><span class="k">Token odds (fitted)</span><span class="v">${pct(r.token_odds)}</span></div>
-        <div class="fact"><span class="k">Expected launch value</span><span class="v">${usd(r.implied_value_usd)}</span></div>
+        <div class="waterfall">${wf.map(([k, v, note], i) => `
+          <div class="wf-row${i === wf.length - 1 ? ' wf-final' : ''}"><div class="wf-top"><span class="k">${esc(k)}</span><span class="v">${v}</span></div><div class="wf-note">${esc(note)}</div></div>`).join('')}
+        </div>
+      </div>
+      <div class="card">
+        <h3>The peers it is priced against</h3>
+        ${peerRows}
+        <p class="note">Live protocols in the same category, nearest in TVL. Their market caps are real;
+        the peer ratio above is the category's median, shrunk toward the global median of ×${mc.global_ratio}.</p>
       </div>
       <div class="card">
         <h3>Farm plan</h3>
@@ -123,9 +142,21 @@ $('model-body').innerHTML = `
     <div class="card">
       <h3>2 · Token odds: which protocols ever list</h3>
       <p>A logistic model fitted on all ${mc.universe} protocols — the label is simply whether a protocol
-      records a token — over log TVL, log age, growth and its category's token record. Across the whole
-      universe ${mc.base_rate_pct}% of protocols have a token; the fit separates the ones that list from
-      the ones that do not with a held-out AUC of ${mc.odds_auc}.</p>
+      records a token — over six readings of each protocol: log TVL, log age, seven-day growth, its
+      category's token record, how many chains it runs on, and whether one of them is Ethereum. Across
+      the whole universe ${mc.base_rate_pct}% of protocols have a token; the fit separates the ones that
+      list from the ones that do not with a held-out AUC of ${mc.odds_auc}.</p>
+      <p>Separation is not calibration, so the held-out predictions are also checked band by band:
+      what the model said, against the share that really held a token.</p>
+      <div class="calib">
+        <div class="calib-head"><span>Predicted odds band</span><span>Predicted</span><span>Actually had a token</span></div>
+        ${mc.odds_calibration.map((b) => `
+        <div class="calib-row">
+          <span class="calib-band">${b.lo_pct}% – ${b.hi_pct}%</span>
+          <span class="calib-bars"><i class="bar-pred" style="width:${b.predicted_pct}%"></i><i class="bar-act" style="width:${b.actual_pct}%"></i></span>
+          <span class="calib-nums">${b.predicted_pct}% → ${b.actual_pct}% <span class="chains">(n=${b.n})</span></span>
+        </div>`).join('')}
+      </div>
     </div>
     <div class="card">
       <h3>3 · Held-out honesty</h3>
