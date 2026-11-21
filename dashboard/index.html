@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Launch Radar — every pre-token protocol, ranked by expected launch value</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="mark" viewBox="0 0 40 40" aria-hidden="true"><circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" stroke-width="2" opacity=".45"/><circle cx="20" cy="20" r="10.5" fill="none" stroke="currentColor" stroke-width="2" opacity=".7"/><circle cx="20" cy="20" r="3.4" fill="currentColor"/><path d="M20 20 L33 9" stroke="currentColor" stroke-width="2.4"/><circle cx="29.5" cy="13.5" r="2.2" fill="currentColor"/></svg>
+    <div>
+      <h1>Token Launch Radar</h1>
+      <p class="tagline">Every protocol with no token yet, ranked by what its launch would be worth — and how to farm it.</p>
+    </div>
+  </div>
+  <div class="stamp" id="stamp"></div>
+</header>
+
+<section class="kpis" id="kpis"></section>
+
+<nav class="views" aria-label="Views">
+  <button class="view-btn is-on" data-view="board" type="button">The board</button>
+  <button class="view-btn" data-view="model" type="button">How the model works</button>
+  <button class="view-btn" data-view="live" type="button">Already trading</button>
+</nav>
+
+<main>
+  <section id="view-board">
+    <div class="controls">
+      <label class="ctl grow">Search <input id="q" type="search" placeholder="Protocol name…" autocomplete="off"></label>
+      <label class="ctl">Category <select id="f-cat"></select></label>
+      <label class="ctl">Chain <select id="f-chain"></select></label>
+      <label class="ctl">Sort by
+        <select id="f-sort">
+          <option value="rank">Expected value</option>
+          <option value="fdv">Launch value (FDV)</option>
+          <option value="odds">Token odds</option>
+          <option value="tvl">TVL</option>
+          <option value="growth">7d growth</option>
+          <option value="age">Age</option>
+        </select>
+      </label>
+      <label class="ctl check"><input id="f-watch" type="checkbox"> Watchlist only</label>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="table-wrap">
+      <table id="board">
+        <thead><tr>
+          <th class="num">#</th><th>Protocol</th><th>Category</th><th>Chains</th>
+          <th class="num">TVL</th><th class="num">7d</th><th class="num">Launch value</th>
+          <th>Token odds</th><th class="num">Expected value</th>
+        </tr></thead>
+        <tbody id="board-body"></tbody>
+      </table>
+    </div>
+    <p class="foot-note" id="board-note"></p>
+  </section>
+
+  <section id="view-detail" hidden>
+    <button class="back" id="back" type="button">← Back to the board</button>
+    <div id="detail"></div>
+  </section>
+
+  <section id="view-model" hidden>
+    <div id="model-body"></div>
+  </section>
+
+  <section id="view-live" hidden>
+    <p class="lede">These protocols already have a token. The radar never ranks them — it learns from them.
+    Their market caps are the training set: the model reads what the market pays for a dollar of TVL in
+    each category, then prices the protocols still to launch. Shown by market cap.</p>
+    <div class="table-wrap">
+      <table id="live-table">
+        <thead><tr><th>Protocol</th><th>Category</th><th class="num">TVL</th><th class="num">Market cap</th><th class="num">Cap / TVL</th><th class="num">7d</th></tr></thead>
+        <tbody id="live-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <p>Built by a program from one sealed snapshot of the protocol universe. No figure is typed in by hand:
+  the model refits itself on the snapshot every run, so the same program scores the next snapshot too.
+  Implied values are model estimates, not prices, and nothing here is financial advice.</p>
+</footer>
+
+<script src="../data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
