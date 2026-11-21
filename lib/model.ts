@@ -5,20 +5,27 @@
 //
 //   implied value = (value if the token launched) x (fitted odds that a token ever lists)
 //
-// Both halves are fitted from the snapshot itself, at run time, on the protocols whose token already
-// trades — never from a hand-kept list of names, so the same program scores any future snapshot:
+// Version 3 changes how the launch value is evidenced. Every pre-token protocol is matched to its
+// nearest comparable live protocols — its comps — in a standardised space of log TVL, seven-day
+// growth and log age, with category and chain-family agreement preferred. The comps are named on
+// the dashboard with their real TVL, market cap and cap/TVL ratio, so a reader can check the price
+// against the market's own record; transported to the target's own growth, age and size with the
+// fitted slopes, their ratio spread is the row's bear-to-bull range. Two estimators are fitted and
+// cross-validated on the snapshot itself:
 //
-//   value  log10(mcap / TVL) is modelled per category (the category median, shrunk toward the global
-//          median by the category's live count), with three slopes fitted by least squares on the
-//          live set: on seven-day TVL growth, on log age and on log size. A pre-token protocol is
-//          priced as its category's peers price, moved by its own growth, age and size.
-//   odds   a logistic fit over every protocol in the snapshot (the label is "records a token"),
-//          on log TVL, log age, growth, the category's shrunk token share, how many chains it runs
-//          on, and whether one of them is Ethereum.
+//   value  a regression: log10(mcap / TVL) per category (the category median, shrunk toward the
+//          global median), with slopes on growth, log age and log size fitted by least squares.
+//   comps  the median transported ratio of the ten nearest live neighbours.
 //
-// The fit is validated the honest way: the live set is split in two by a hash of the slug, each half
-// is fitted on one side and scored on the other, and the dashboard's model card prints the held-out
-// error. Every figure derives from the snapshot's own as_of date, so two runs write the same bytes.
+// The model card prints both held-out median errors and the blends between them: on this snapshot
+// every blend is worse than the regression alone, so the point estimate stays with the regression
+// and the comps carry the evidence and the range — the card says so, with the numbers. The odds
+// half is unchanged: a logistic fit over every protocol in the snapshot (the label is "records a
+// token"). Rows are also tiered by launch readiness — token odds nudged by seven-day TVL
+// momentum — and each farm plan is costed: cash committed, an expected reward under a stated
+// distribution assumption, and the multiple between them.
+//
+// Every figure derives from the snapshot's own as_of date, so two runs write the same bytes.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -44,13 +51,58 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the board rows carry it. */
-export const MODEL_VERSION = 'radar-3-fitted';
+export const MODEL_VERSION = 'radar-4-comps';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
 
 /** How many pre-token protocols below the watchlist floor the early radar carries, by TVL. */
 export const EARLY_ROWS = 160;
+
+/** How many nearest live comparables price and bound each pre-token row. */
+export const COMP_COUNT = 10;
+
+/**
+ * The farm-economics assumption, stated on the dashboard wherever it is used: a launch is assumed
+ * to distribute this share of its base-case value to early users. It is an assumption, not a
+ * snapshot figure; the snapshot carries no distribution data.
+ */
+export const AIRDROP_SHARE = 0.05;
+
+/** The assumed farming cohort: one qualifying wallet per this much TVL, clamped to a sane range. */
+export const COHORT_TVL_PER_WALLET = 25_000;
+
+/** One named comparable: a live protocol the market already prices, and how near it sits. */
+export interface CompPeer {
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  mcap_usd: number;
+  /** The peer's own cap / TVL, as the market set it. */
+  ratio: number;
+  /** The peer's ratio transported to the target's growth, age and size with the fitted slopes. */
+  adj_ratio: number;
+  /** Standardised distance in the matching space, after the category and chain penalties. */
+  distance: number;
+  same_category: boolean;
+}
+
+/** A row's launch-readiness tier: token odds nudged by seven-day TVL momentum. */
+export type Tier = 'imminent' | 'emerging' | 'early';
+
+/** The costed farm plan: what a wallet commits, and what the base case pays it back. */
+export interface FarmEconomics {
+  capital_usd: number;
+  fees_usd: number;
+  cost_usd: number;
+  weeks: number;
+  /** One wallet's expected share of the assumed distribution, already weighted by token odds. */
+  reward_usd: number;
+  reward_bear_usd: number;
+  reward_bull_usd: number;
+  roi_x: number;
+  cohort_wallets: number;
+}
 
 /** One row of board.json: the ranked board's row. */
 export interface BoardRow {
@@ -69,7 +121,17 @@ export interface BoardRow {
   age_days: number | null;
   implied_value_usd: number;
   fdv_usd: number;
+  /** The scenario band around the launch value: bear and bull, from the comps' transported spread. */
+  fdv_bear_usd: number;
+  fdv_bull_usd: number;
+  /** The comps estimator's own launch value, before the blend decision the model card reports. */
+  fdv_comps_usd: number;
   token_odds: number;
+  tier: Tier;
+  readiness: number;
+  /** The five nearest comparables, named: the evidence the price and the band rest on. */
+  comps: CompPeer[];
+  farm_econ: FarmEconomics;
   model: {
     peer_ratio: number;
     growth_factor: number;
@@ -92,7 +154,12 @@ export interface RadarRow {
   age_days: number | null;
   implied_value_usd: number;
   fdv_usd: number;
+  fdv_bear_usd: number;
+  fdv_bull_usd: number;
+  fdv_comps_usd: number;
   token_odds: number;
+  tier: Tier;
+  readiness: number;
   peer_ratio: number;
   growth_factor: number;
   age_factor: number;
@@ -103,6 +170,9 @@ export interface RadarRow {
   cat_rows: number;
   /** The live-token peers nearest this row in size, same category: the comparison the price rests on. */
   live_peers: { name: string; ratio: number; tvl_usd: number; mcap_usd: number }[];
+  /** The five nearest comparables across the whole live set, named, with their transported ratios. */
+  comps: CompPeer[];
+  farm_econ: FarmEconomics;
   farm_steps: string[];
 }
 
@@ -137,6 +207,11 @@ export interface ModelCard {
   holdout_median_error_x: number;
   holdout_within_2x_pct: number;
   holdout_within_5x_pct: number;
+  /** The comps estimator alone, on the same held-out split: the comparison the blend decision rests on. */
+  comps_median_error_x: number;
+  comps_within_2x_pct: number;
+  /** A 50/50 log blend of the two estimators, same split: worse than the regression alone here. */
+  blend_median_error_x: number;
   odds_auc: number;
   odds_calibration: OddsBand[];
   base_rate_pct: number;
@@ -317,6 +392,137 @@ export function priceProtocol(fit: ValueFit, p: SnapshotProtocol, asOf: string):
   };
 }
 
+/** The chain family a protocol runs on, for comp matching: where its users and gas live. */
+function chainFamily(chains: string[]): string {
+  const cs = chains.map((c) => c.toLowerCase());
+  if (cs.some((c) => c.includes('ethereum'))) return 'ethereum';
+  if (cs.some((c) => c.includes('solana'))) return 'solana';
+  if (cs.some((c) => c.includes('bsc') || c.includes('bnb'))) return 'bnb';
+  return 'other';
+}
+
+/** The matching features of one protocol: log size, growth, log age. */
+function compFeatures(p: SnapshotProtocol, medianGrowth: number, medianAge: number, asOf: string): [number, number, number] {
+  return [
+    Math.log10(Math.max(1, p.tvl_usd)),
+    growthOf(p, medianGrowth),
+    Math.log10(Math.max(7, ageDays(asOf, p.listed_at) ?? medianAge)),
+  ];
+}
+
+/** The fitted comps index: the live set with its matching features and their spread. */
+export interface CompsFit {
+  rows: { p: SnapshotProtocol; feats: [number, number, number] }[];
+  stds: [number, number, number];
+  medianGrowth: number;
+  medianAge: number;
+}
+
+/** Index the live set for nearest-comparable matching. */
+export function fitComps(live: SnapshotProtocol[], asOf: string): CompsFit {
+  const rows = live.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const medianGrowth = median(rows.map((p) => growthOf(p, 0)));
+  const medianAge = median(rows.map((p) => ageDays(asOf, p.listed_at) ?? 365));
+  const feats = rows.map((p) => compFeatures(p, medianGrowth, medianAge, asOf));
+  const stds = [0, 1, 2].map((j) => {
+    const col = feats.map((f) => f[j]!);
+    const m = mean(col);
+    return Math.sqrt(col.reduce((a, v) => a + (v - m) * (v - m), 0) / Math.max(1, col.length)) || 1;
+  }) as [number, number, number];
+  return { rows: rows.map((p, i) => ({ p, feats: feats[i]! })), stds, medianGrowth, medianAge };
+}
+
+/** The distance penalty for a comp in another category: matching prefers the same line of business. */
+const COMP_CATEGORY_PENALTY = 1.25;
+/** The distance penalty for a comp on another chain family. */
+const COMP_CHAIN_PENALTY = 0.5;
+
+/** One protocol's comparable set: the nearest live protocols, and the value they imply. */
+export interface CompsResult {
+  comps: CompPeer[];
+  /** The comps estimator's launch value: the median transported ratio, times TVL. */
+  fdv: number;
+  /** The band: the transported ratios' quartiles, times TVL. */
+  bear: number;
+  bull: number;
+}
+
+/** The q-quantile of a list, by the nearest-rank rule the band's honesty rests on. */
+function quantile(xs: number[], q: number): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[clamp(Math.floor(q * s.length), 0, s.length - 1)]!;
+}
+
+/**
+ * Match one protocol to its nearest live comparables and price it from them. Distance is
+ * standardised over log TVL and log age (growth is left to the transport: a neighbour's ratio is
+ * moved to the target's own growth, age and size with the regression's fitted slopes before any
+ * median is taken, so a fast-growing neighbour is not misread as a rich one).
+ */
+export function compsFor(fit: CompsFit, valueFit: ValueFit, p: SnapshotProtocol, asOf: string): CompsResult {
+  const f = compFeatures(p, fit.medianGrowth, fit.medianAge, asOf);
+  const cat = p.category ?? 'Uncategorised';
+  const fam = chainFamily(p.chains);
+  const scored = fit.rows.map(({ p: t, feats: tf }) => {
+    const d2 =
+      Math.pow((f[0] - tf[0]) / fit.stds[0], 2) +
+      Math.pow((f[2] - tf[2]) / fit.stds[2], 2);
+    let d = Math.sqrt(d2);
+    const sameCat = (t.category ?? 'Uncategorised') === cat;
+    if (!sameCat) d += COMP_CATEGORY_PENALTY;
+    if (chainFamily(t.chains) !== fam) d += COMP_CHAIN_PENALTY;
+    return { t, tf, d, sameCat };
+  });
+  scored.sort((a, b) => a.d - b.d || (a.t.slug < b.t.slug ? -1 : a.t.slug > b.t.slug ? 1 : 0));
+  const top = scored.slice(0, COMP_COUNT);
+  const comps: CompPeer[] = top.map(({ t, tf, d, sameCat }) => {
+    const ratio = t.mcap_usd! / t.tvl_usd;
+    const adj =
+      Math.log10(ratio) +
+      valueFit.growthSlope * (f[1] - tf[1]) +
+      valueFit.ageSlope * (f[2] - tf[2]) +
+      valueFit.tvlSlope * (f[0] - tf[0]);
+    return {
+      name: t.name,
+      category: t.category,
+      tvl_usd: t.tvl_usd,
+      mcap_usd: t.mcap_usd!,
+      ratio: round2(ratio),
+      adj_ratio: round2(Math.pow(10, adj)),
+      distance: round2(d),
+      same_category: sameCat,
+    };
+  });
+  const adjLog = top.map(({ t, tf }) =>
+    Math.log10(t.mcap_usd! / t.tvl_usd) +
+    valueFit.growthSlope * (f[1] - tf[1]) +
+    valueFit.ageSlope * (f[2] - tf[2]) +
+    valueFit.tvlSlope * (f[0] - tf[0]),
+  );
+  return {
+    comps,
+    fdv: clamp(p.tvl_usd * Math.pow(10, median(adjLog)), 10_000, 1e12),
+    bear: clamp(p.tvl_usd * Math.pow(10, quantile(adjLog, 0.25)), 10_000, 1e12),
+    bull: clamp(p.tvl_usd * Math.pow(10, quantile(adjLog, 0.75)), 10_000, 1e12),
+  };
+}
+
+/**
+ * A row's launch readiness and tier: the fitted token odds, nudged by the protocol's own
+ * seven-day TVL momentum — a protocol gathering TVL is readier than a flat one at the same odds.
+ */
+export function readinessOf(odds: number, change7d: number | null): number {
+  const momentum = change7d === null || !Number.isFinite(change7d) ? 0 : clamp(change7d, -30, 30) / 200;
+  return round4(clamp(odds * (1 + momentum), 0.01, 0.99));
+}
+
+/** The tier a readiness score earns: the radar's three ranges. */
+export function tierOf(readiness: number): Tier {
+  if (readiness >= 0.5) return 'imminent';
+  if (readiness >= 0.3) return 'emerging';
+  return 'early';
+}
+
 /** The fitted token-odds model: logistic weights over standardised features. */
 export interface OddsFit {
   weights: number[];
@@ -444,14 +650,22 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
   const halfA = live.filter((p) => hashSlug(p.slug) % 2 === 0);
   const halfB = live.filter((p) => hashSlug(p.slug) % 2 === 1);
   const errors: number[] = [];
+  const compsErrors: number[] = [];
+  const blendErrors: number[] = [];
   for (const [train, test] of [[halfA, halfB], [halfB, halfA]] as const) {
     const fit = fitValue(train, snapshot.as_of);
+    const compsFit = fitComps(train, snapshot.as_of);
     for (const p of test) {
       const { fdv } = priceProtocol(fit, p, snapshot.as_of);
       errors.push(Math.abs(Math.log10(fdv / p.mcap_usd!)));
+      const compsFdv = compsFor(compsFit, fit, p, snapshot.as_of).fdv;
+      compsErrors.push(Math.abs(Math.log10(compsFdv / p.mcap_usd!)));
+      const blend = Math.exp(0.5 * Math.log(compsFdv) + 0.5 * Math.log(fdv));
+      blendErrors.push(Math.abs(Math.log10(blend / p.mcap_usd!)));
     }
   }
   const within = (x: number): number => round2((100 * errors.filter((e) => e <= Math.log10(x)).length) / Math.max(1, errors.length));
+  const compsWithin = (x: number): number => round2((100 * compsErrors.filter((e) => e <= Math.log10(x)).length) / Math.max(1, compsErrors.length));
 
   const uniA = snapshot.protocols.filter((p) => hashSlug(p.slug) % 2 === 0);
   const uniB = snapshot.protocols.filter((p) => hashSlug(p.slug) % 2 === 1);
@@ -490,6 +704,9 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     holdout_median_error_x: round2(Math.pow(10, median(errors))),
     holdout_within_2x_pct: within(2),
     holdout_within_5x_pct: within(5),
+    comps_median_error_x: round2(Math.pow(10, median(compsErrors))),
+    comps_within_2x_pct: compsWithin(2),
+    blend_median_error_x: round2(Math.pow(10, median(blendErrors))),
     odds_auc: auc(scored),
     odds_calibration: calibration,
     base_rate_pct: round2((100 * snapshot.protocols.filter((p) => !isPreToken(p)).length) / Math.max(1, snapshot.protocols.length)),
@@ -535,6 +752,36 @@ function holdDaysFor(age: number | null): number {
   return 30;
 }
 
+/**
+ * The costed farm plan: the cash a wallet commits (capital in the position plus the plan's gas,
+ * week by week over the holding window), and what one wallet's share of a launch would be under
+ * the stated distribution assumption — the pool is AIRDROP_SHARE of the launch value, weighted by
+ * the fitted token odds, shared across a cohort of one wallet per COHORT_TVL_PER_WALLET of TVL.
+ */
+export function farmEconomics(p: SnapshotProtocol, age: number | null, fdvBase: number, fdvBear: number, fdvBull: number, odds: number): FarmEconomics {
+  const chain = chainClass(p);
+  const capital = capitalFor(p);
+  const hold = holdDaysFor(age);
+  const weeks = Math.max(1, Math.ceil(hold / 7));
+  // Three transactions to open and work the position, then one qualifying action a week.
+  const fees = Math.round((3 + weeks) * chain.gasUsd * 100) / 100;
+  const cost = Math.round((capital + fees) * 100) / 100;
+  const cohort = clamp(Math.round(p.tvl_usd / COHORT_TVL_PER_WALLET), 100, 20_000);
+  const reward = (fdv: number): number => Math.max(0, Math.round(((fdv * AIRDROP_SHARE * odds) / cohort) * 100) / 100);
+  const base = reward(fdvBase);
+  return {
+    capital_usd: capital,
+    fees_usd: fees,
+    cost_usd: cost,
+    weeks,
+    reward_usd: base,
+    reward_bear_usd: reward(fdvBear),
+    reward_bull_usd: reward(fdvBull),
+    roi_x: round2(base / Math.max(1, cost)),
+    cohort_wallets: cohort,
+  };
+}
+
 const fmtUsd = (v: number): string => (v >= 1_000_000_000 ? `$${(v / 1_000_000_000).toFixed(1)}B` : v >= 1_000_000 ? `$${Math.round(v / 1_000_000)}M` : `$${Math.round(v / 1_000)}K`);
 
 /** The category's core action, in words a farmer can follow, on the protocol's own first chain. */
@@ -571,15 +818,16 @@ function secondActionFor(p: SnapshotProtocol, chain: string): string {
 }
 
 /**
- * A protocol's farm plan: six steps, each an action with a cost and a time, derived from the
- * protocol's own record (category, chains, TVL, age) — never from a hand-written list of names.
+ * A protocol's farm plan: six steps of action, plus a seventh that costs it — each derived from
+ * the protocol's own record (category, chains, TVL, age) and, for the costing, its fitted value
+ * and odds — never from a hand-written list of names.
  */
-export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
+export function farmSteps(p: SnapshotProtocol, age: number | null, econ?: FarmEconomics): string[] {
   const chain = chainClass(p);
   const capital = capitalFor(p);
   const hold = holdDaysFor(age);
   const multi = p.chains.length > 1 ? ` It also runs on ${p.chains[1]}, where the same position usually costs less gas.` : '';
-  return [
+  const steps = [
     stepText(
       `Use a fresh wallet that holds only the funds you plan to farm ${p.name} with, and keep its seed phrase offline.${multi}`,
       'under $3 to fund the wallet',
@@ -615,6 +863,16 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): string[] {
       '10 minutes',
     ),
   ];
+  if (econ !== undefined) {
+    steps.push(
+      stepText(
+        `The plan's maths: about $${econ.cost_usd} committed ($${econ.capital_usd} of capital plus $${econ.fees_usd} of fees over ${econ.weeks} weeks). If ${p.name} launches at the radar's base case and distributes the assumed ${Math.round(AIRDROP_SHARE * 100)}% of its value to early users, one wallet's expected share is about $${Math.round(econ.reward_usd)} — roughly x${econ.roi_x} the cost, already weighted by the fitted odds it ever lists.`,
+        'nothing further',
+        'the holding window above',
+      ),
+    );
+  }
+  return steps;
 }
 
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
@@ -638,6 +896,7 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
 export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
   const valueFit = fitValue(live, snapshot.as_of);
+  const compsFit = fitComps(live, snapshot.as_of);
   const oddsFit = fitOdds(snapshot.protocols, snapshot.as_of);
   const index = new Map(snapshot.protocols.map((p) => [p.slug, p]));
   const chosen = new Map<string, SnapshotProtocol>();
@@ -657,9 +916,27 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
   for (const p of early) chosen.set(p.slug, p);
   const scored = [...chosen.values()].map((p) => {
     const priced = priceProtocol(valueFit, p, snapshot.as_of);
+    const comps = compsFor(compsFit, valueFit, p, snapshot.as_of);
     const odds = tokenOdds(oddsFit, p, snapshot.as_of);
     const age = ageDays(snapshot.as_of, p.listed_at);
-    return { p, ...priced, odds, age, implied: Math.max(1, Math.round(priced.fdv * odds)) };
+    // The band is the comps' transported spread, widened to always hold the point estimate.
+    const bear = Math.min(comps.bear, priced.fdv);
+    const bull = Math.max(comps.bull, priced.fdv);
+    const readiness = readinessOf(odds, p.change_7d);
+    const econ = farmEconomics(p, age, priced.fdv, bear, bull, odds);
+    return {
+      p,
+      ...priced,
+      comps,
+      bear,
+      bull,
+      odds,
+      age,
+      readiness,
+      tier: tierOf(readiness),
+      econ,
+      implied: Math.max(1, Math.round(priced.fdv * odds)),
+    };
   });
   scored.sort((a, b) => b.implied - a.implied || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
   return scored.map((s, i) => ({
@@ -678,14 +955,21 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     age_days: s.age,
     implied_value_usd: s.implied,
     fdv_usd: Math.round(s.fdv),
+    fdv_bear_usd: Math.round(s.bear),
+    fdv_bull_usd: Math.round(s.bull),
+    fdv_comps_usd: Math.round(s.comps.fdv),
     token_odds: s.odds,
+    tier: s.tier,
+    readiness: s.readiness,
+    comps: s.comps.comps.slice(0, 5),
+    farm_econ: s.econ,
     model: {
       peer_ratio: s.peerRatio,
       growth_factor: s.growthFactor,
       age_factor: s.ageFactor,
       peers: s.peers,
     },
-    farm_steps: farmSteps(s.p, s.age),
+    farm_steps: farmSteps(s.p, s.age, s.econ),
   }));
 }
 
@@ -741,7 +1025,12 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       age_days: row.age_days,
       implied_value_usd: row.implied_value_usd,
       fdv_usd: row.fdv_usd,
+      fdv_bear_usd: row.fdv_bear_usd,
+      fdv_bull_usd: row.fdv_bull_usd,
+      fdv_comps_usd: row.fdv_comps_usd,
       token_odds: row.token_odds,
+      tier: row.tier,
+      readiness: row.readiness,
       peer_ratio: row.model.peer_ratio,
       growth_factor: row.model.growth_factor,
       age_factor: row.model.age_factor,
@@ -750,6 +1039,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       cat_rank: rankInCat,
       cat_rows: catTotals.get(cat) ?? 0,
       live_peers: peers,
+      comps: row.comps,
+      farm_econ: row.farm_econ,
       farm_steps: row.farm_steps,
       };
     }),
