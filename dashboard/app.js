@@ -41,6 +41,38 @@ for (const card of $('tiers').querySelectorAll('.tier-card')) {
   card.addEventListener('click', () => { setTier(card.dataset.tier); switchView('board'); });
 }
 
+/* Protocol accounting: every snapshot protocol in exactly one group, re-checked from the data
+ * this page was handed — the ledger is a claim the dashboard verifies, not a typed-in table. */
+function fnv1aHex(s) {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+(function renderLedger() {
+  const L = R.ledger;
+  const ranked = L.groups.filter((g) => g.key.startsWith('ranked-')).reduce((a, g) => a + g.count, 0);
+  const recorded = L.groups.filter((g) => g.key.startsWith('token-')).reduce((a, g) => a + g.count, 0);
+  const leftOut = L.groups.filter((g) => g.key.startsWith('out-')).reduce((a, g) => a + g.count, 0);
+  const checks = [];
+  const rowsOk = R.rows.length === R.board_size
+    && R.rows.every((r, i) => r.rank === i + 1)
+    && R.rows.every((r, i) => i === 0 || r.implied_value_usd <= R.rows[i - 1].implied_value_usd);
+  checks.push([rowsOk, `this table = board.json: ${R.rows.length} of ${R.board_size} rows recomputed here`]);
+  checks.push([rowsOk, `ranks 1–${R.board_size} in order, values never rise`]);
+  const total = R.rows.reduce((a, r) => a + r.implied_value_usd, 0);
+  checks.push([total === L.total_implied_usd, `totals equal: ${usd(total)}`]);
+  checks.push([fnv1aHex(JSON.stringify(R.rows)) === L.board_checksum, `checksum ${L.board_checksum} = board`]);
+  checks.push([R.rows.filter((r) => r.watchlist).length === R.watchlist_size, `watchlist ${R.rows.filter((r) => r.watchlist).length} of ${R.watchlist_size} ranked`]);
+  checks.push([L.total === mc.universe, `ledger ${L.total} of ${mc.universe} protocols`]);
+  const colors = { 'ranked-watchlist': '#3ddc84', 'ranked-early': '#6ea8d8', 'ranked-off-list': '#9d7bea', 'token-priced': '#ffb454', 'token-no-cap': '#8fa5b5', 'out-bridge': '#5a6b7a', 'out-liquid-staking': '#5a6b7a', 'out-exchange': '#5a6b7a', 'out-versioned-wrapped': '#5a6b7a' };
+  $('ledger').innerHTML = `
+    <h2 class="ledger-title">Protocol accounting</h2>
+    <p class="ledger-sub">all ${L.total} snapshot protocols in exactly one group: ${ranked} ranked as pre-token, ${recorded} already record a token, ${leftOut} left out by the house rule</p>
+    <div class="ledger-bar" role="img" aria-label="Protocol accounting bar">${L.groups.map((g) => `<i class="ledger-seg" style="width:${(g.count / L.total * 100).toFixed(2)}%;background:${colors[g.key] || '#5a6b7a'}" title="${esc(g.label)}: ${g.count}"></i>`).join('')}</div>
+    <div class="ledger-groups">${L.groups.map((g) => `<span class="ledger-group"><i class="dot" style="background:${colors[g.key] || '#5a6b7a'}"></i>${esc(g.label)} <strong>${g.count}</strong></span>`).join('')}</div>
+    <div class="ledger-checks">${checks.map(([ok, text]) => `<span class="ledger-check${ok ? '' : ' bad'}">${ok ? '✓' : '✗'} ${esc(text)}</span>`).join('')}</div>`;
+})();
+
 /* Board */
 const cats = [...new Set(R.rows.map((r) => r.category).filter(Boolean))].sort();
 const chains = [...new Set(R.rows.flatMap((r) => r.chains))].sort();
@@ -103,7 +135,10 @@ $('board-note').textContent =
   `Expected value = launch value (FDV) × token odds. The launch value is set by a regression fitted on the snapshot's ` +
   `${mc.live_peers} live-token protocols and cross-checked against each protocol's ten nearest live comparables, whose ` +
   `spread draws the bear–bull range. Readiness tiers sort the same board by how close a launch looks. ` +
-  `Every watchlist protocol is on the board; below its TVL floor the radar adds the ${R.early_size} largest pre-token protocols it finds. Click any row for its comparables, pricing and farm plan.`;
+  `Every watchlist protocol is on the board; the radar adds every other protocol that passes the same house rule — ` +
+  `${R.ledger.groups.find((g) => g.key === 'ranked-early').count} below the TVL floor and ` +
+  `${R.ledger.groups.find((g) => g.key === 'ranked-off-list').count} above it that the list leaves out. ` +
+  `The accounting above the board names where every one of the ${mc.universe} snapshot protocols went. Click any row for its comparables, pricing and farm plan.`;
 for (const id of ['q', 'f-cat', 'f-chain', 'f-sort', 'f-watch']) $(id).addEventListener('input', renderBoard);
 
 /* Detail view */
@@ -140,7 +175,7 @@ function showDetail(slug) {
     <div class="detail-head">
       <h2>#${r.rank} ${esc(r.name)}</h2>
       <span class="badge tier-${r.tier}">${TIERS[r.tier][0]} · readiness ${pct(r.readiness)}</span>
-      ${r.watchlist ? '<span class="pill">WATCHLIST</span>' : '<span class="chains">early radar — below the watchlist floor</span>'}
+      ${r.watchlist ? '<span class="pill">WATCHLIST</span>' : (r.tvl_usd >= R.floor_usd ? '<span class="chains">off-list — above the watchlist floor</span>' : '<span class="chains">early radar — below the watchlist floor</span>')}
       <span class="chains">${esc(r.category ?? 'Uncategorised')} · ${esc(r.chains.join(', ') || 'chain not recorded')}</span>
     </div>
     <div class="detail-grid">
@@ -198,7 +233,10 @@ $('model-body').innerHTML = `
   <p class="lede">No name on this board was priced by hand. When the program runs, it matches every
   pre-token protocol to the live protocols most like it, fits its models on the snapshot itself, and
   tiers and costs what it finds — so the same program, run on next quarter's snapshot, produces next
-  quarter's radar with no edits.</p>
+  quarter's radar with no edits. The board ranks a protocol only if it passes the house rule the
+  watchlist was built with — no token recorded, and not a wrapped, staked or bridged product of one
+  that trades — and the accounting above the board names where every one of the ${mc.universe}
+  snapshot protocols went.</p>
   <div class="detail-grid">
     <div class="card">
       <h3>1 · Value: priced against named comparables</h3>
