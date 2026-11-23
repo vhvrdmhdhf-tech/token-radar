@@ -35,9 +35,16 @@ plan.
   capital, fees, weeks — with an expected reward under a stated distribution assumption (5% of
   base-case value to early users, one wallet per $25K of TVL), shown on every detail view.
 
-The board covers the whole watchlist and adds the 160 largest pre-token protocols below its floor —
-200 rows, each with a seven-step farm plan whose actions, costs and durations come from the
-protocol's own category, chains, TVL and age.
+The board covers the whole watchlist and every other protocol that passes the same house rule
+the watchlist was built with — no token recorded, and not a wrapped, staked or bridged product of
+one that trades: no bridge, liquid staking, restaking or exchange category, no version-marked
+name, no wrapped / staked / staking in the name, no exchange's name at the start. That is 198
+rows — 40 on the watchlist, 138 early ones below its TVL floor, 20 above the floor that the list
+leaves out — each with a seven-step farm plan whose actions, costs and durations come from the
+protocol's own category, chains, TVL and age. A protocol accounting above the board puts all 758
+snapshot protocols in exactly one group — ranked, priced comp, token recorded with no usable cap,
+or left out by the rule — and re-checks the board's ranks, totals and checksum from the data the
+page was handed, so the coverage claim is verified on the cover, not asserted in the text.
 
 ## Run it
 
@@ -56,7 +63,11 @@ directory. Two runs on the same snapshot write the same bytes.
 - `screenshots/` — the board, a protocol's detail view, a tier-filtered view
 - `vendor/makefun-board.ts` — the competition's dossier library, vendored byte for byte
 
-Model version `radar-5-odds8`: the validation release. The value half is the comparables release's,
+Model version `radar-6-house-rule`: the coverage release. The board now applies the house rule
+that built the watchlist to every row, not just above the floor — v4 ranked 39 bridges, liquid
+staking receipts and staked products below the floor as launches, and this release leaves all of
+them out, ranks the 20 above-floor protocols the list leaves out instead, and shows the whole
+758-protocol accounting on the cover. The value and odds halves are the validation release's,
 unchanged — gradient-boosted trees, median-loss fits, blends and re-tuned shrinkage were all fitted
 and priced twenty repeated splits worse than its regression. The odds half gains two readings
 (Solana deployment, no recorded start date) that won their place on the same repeated splits, and
