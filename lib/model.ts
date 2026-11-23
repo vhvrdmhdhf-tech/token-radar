@@ -58,7 +58,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the board rows carry it. */
-export const MODEL_VERSION = 'radar-5-odds8';
+export const MODEL_VERSION = 'radar-6-house-rule';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -233,6 +233,30 @@ export interface ModelCard {
   base_rate_pct: number;
 }
 
+/** One group of the protocol accounting: every snapshot protocol sits in exactly one group. */
+export interface LedgerGroup {
+  key: string;
+  label: string;
+  count: number;
+}
+
+/**
+ * The protocol accounting: the snapshot's whole universe, split into the groups the board's
+ * rule produces. Ranked rows are the watchlist plus every other protocol that passes the house
+ * rule; priced comps are the live-token protocols the value model fits on; the rest record a
+ * token but carry no usable market cap; the four out-groups are the house rule's exclusions.
+ * The groups sum to the snapshot's protocol count, and the dashboard re-checks that sum, the
+ * board's ranks and the totals from the data it was handed.
+ */
+export interface Ledger {
+  groups: LedgerGroup[];
+  total: number;
+  /** The board's implied values, summed — the dashboard checks it against its own rows. */
+  total_implied_usd: number;
+  /** FNV-1a over the board rows as the dashboard receives them, hex — the dashboard recomputes it. */
+  board_checksum: string;
+}
+
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -244,6 +268,7 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  ledger: Ledger;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -278,9 +303,43 @@ export function isPreToken(p: SnapshotProtocol): boolean {
 /** DefiLlama's version-marker rule: a name ending in a release is a pool of another protocol. */
 const VERSIONED = /\s(V\d+(\.\d+)?|v\d+(\.\d+)?|\d+\.\d+)$/;
 
-/** Whether a protocol is one the board may rank: pre-token, not an exchange, not a versioned pool. */
+/** A whole word in a name that marks a wrapped, staked or bridged product of a token that trades. */
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/** An exchange whose name at the start of a protocol's name marks it as that exchange's product. */
+const EXCHANGE_PREFIXES = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/**
+ * Categories the house rule leaves off the watchlist: a bridge is a bridged product, liquid
+ * staking and restaking are staked products, and a centralised exchange is not a launch at all.
+ */
+const EXCLUDED_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/**
+ * Whether a protocol is one the board may rank: pre-token, and passing the house rule the
+ * watchlist itself was built with — the same rule, applied to the whole board, not just above the
+ * floor. The watchlist is a floor, never a ceiling: a protocol below it is no worse a subject, but
+ * one the rule leaves out is a token that already exists in another form, and ranking it as a
+ * launch would price a token that trades.
+ */
 export function isRankable(p: SnapshotProtocol): boolean {
-  return isPreToken(p) && p.category !== 'CEX' && !VERSIONED.test(p.name);
+  return (
+    isPreToken(p) &&
+    !EXCLUDED_CATEGORIES.has(p.category ?? '') &&
+    !VERSIONED.test(p.name) &&
+    !WRAPPED_WORD.test(p.name) &&
+    !EXCHANGE_PREFIXES.some((prefix) => p.name.startsWith(prefix))
+  );
+}
+
+/** The house rule's reason a pre-token protocol is left off the board, or null when it ranks. */
+export function exclusionReason(p: SnapshotProtocol): string | null {
+  if (!isPreToken(p)) return 'token-recorded';
+  if (p.category === 'CEX') return 'out-exchange';
+  if (p.category === 'Bridge' || p.category === 'Canonical Bridge') return 'out-bridge';
+  if (p.category === 'Liquid Staking' || p.category === 'Liquid Restaking' || p.category === 'Restaked BTC') return 'out-liquid-staking';
+  if (VERSIONED.test(p.name) || WRAPPED_WORD.test(p.name) || EXCHANGE_PREFIXES.some((prefix) => p.name.startsWith(prefix))) return 'out-versioned-wrapped';
+  return null;
 }
 
 /** A small deterministic string hash (FNV-1a): the held-out split and nothing else hangs on it. */
@@ -979,6 +1038,60 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
+/** The live-token protocols the value model fits on: a market cap recorded, positive TVL. */
+function livePeersOf(snapshot: Snapshot): SnapshotProtocol[] {
+  return snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+}
+
+/** The protocol accounting for a finished board: every snapshot protocol in exactly one group. */
+export function buildLedger(snapshot: Snapshot, board: BoardRow[], rows: RadarRow[]): Ledger {
+  const watch = new Set(snapshot.watchlist);
+  const boardSlugs = new Set(board.map((r) => r.slug));
+  const rankedWatchlist = board.filter((r) => watch.has(r.slug)).length;
+  const rankedEarly = board.filter((r) => !watch.has(r.slug) && (snapshot.protocols.find((p) => p.slug === r.slug)?.tvl_usd ?? 0) < snapshot.floor_usd).length;
+  const rankedOffList = board.length - rankedWatchlist - rankedEarly;
+  const priced = livePeersOf(snapshot).length;
+  let tokenNoCap = 0;
+  const out: Record<string, number> = { 'out-bridge': 0, 'out-liquid-staking': 0, 'out-exchange': 0, 'out-versioned-wrapped': 0 };
+  for (const p of snapshot.protocols) {
+    if (boardSlugs.has(p.slug)) continue;
+    if (!isPreToken(p)) {
+      if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) tokenNoCap += 1;
+      continue;
+    }
+    const reason = exclusionReason(p);
+    if (reason !== null && reason in out) out[reason] = (out[reason] ?? 0) + 1;
+  }
+  const groups: LedgerGroup[] = [
+    { key: 'ranked-watchlist', label: 'Ranked · watchlist', count: rankedWatchlist },
+    { key: 'ranked-early', label: 'Ranked · early, below the floor', count: rankedEarly },
+    { key: 'ranked-off-list', label: 'Ranked · off-list, above the floor', count: rankedOffList },
+    { key: 'token-priced', label: 'Token trades · priced comp', count: priced },
+    { key: 'token-no-cap', label: 'Token recorded · no usable cap', count: tokenNoCap },
+    { key: 'out-bridge', label: 'Out · bridge', count: out['out-bridge'] ?? 0 },
+    { key: 'out-liquid-staking', label: 'Out · liquid staking', count: out['out-liquid-staking'] ?? 0 },
+    { key: 'out-exchange', label: 'Out · exchange', count: out['out-exchange'] ?? 0 },
+    { key: 'out-versioned-wrapped', label: 'Out · versioned or wrapped', count: out['out-versioned-wrapped'] ?? 0 },
+  ];
+  const total = groups.reduce((a, g) => a + g.count, 0);
+  return {
+    groups,
+    total,
+    total_implied_usd: rows.reduce((a, r) => a + r.implied_value_usd, 0),
+    board_checksum: fnv1aHex(JSON.stringify(rows)),
+  };
+}
+
+/** FNV-1a, hex: the held-out split, the ledger checksum and nothing else hangs on it. */
+function fnv1aHex(s: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
 export function buildBoard(snapshot: Snapshot): BoardRow[] {
   const live = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
@@ -992,12 +1105,16 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     const p = index.get(slug);
     if (p !== undefined) chosen.set(slug, p);
   }
-  // The radar proper: rankable pre-token protocols below the watchlist's floor, the largest 160 by
-  // TVL. Above the floor the snapshot's own curation is the line — what it leaves off the watchlist
-  // up there is an exchange, or a wrapped or bridged form of an asset that already trades, and a
-  // radar that ranks those as launches would be ranking tokens that exist.
+  // The radar proper: every other pre-token protocol that passes the house rule, the largest 160
+  // by TVL. The rule is the same one that built the watchlist, applied to the whole board: above
+  // the floor the snapshot's own curation is the line only for what the rule excludes — a bridge,
+  // a liquid staking receipt or a versioned pool is a token that already exists in another form,
+  // whatever its TVL. What the rule passes above the floor but the list leaves out (twenty here,
+  // each with a parent protocol recorded in DefiLlama's fuller record, which this snapshot does
+  // not carry) is no worse a subject: the watchlist is a floor, never a ceiling, and the board
+  // ranks them as it ranks the early ones below the floor.
   const early = snapshot.protocols
-    .filter((p) => !chosen.has(p.slug) && isRankable(p) && p.tvl_usd < snapshot.floor_usd)
+    .filter((p) => !chosen.has(p.slug) && isRankable(p))
     .sort((a, b) => b.tvl_usd - a.tvl_usd || (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
     .slice(0, EARLY_ROWS);
   for (const p of early) chosen.set(p.slug, p);
@@ -1080,17 +1197,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
   const catSeen = new Map<string, number>();
   const catTotals = new Map<string, number>();
   for (const row of board) catTotals.set(row.category ?? 'Uncategorised', (catTotals.get(row.category ?? 'Uncategorised') ?? 0) + 1);
-  const radar: RadarData = {
-    as_of: snapshot.as_of,
-    source: snapshot.source,
-    floor_usd: snapshot.floor_usd,
-    model_version: MODEL_VERSION,
-    model_card: card,
-    watchlist_size: snapshot.watchlist.length,
-    board_size: board.length,
-    early_size: board.filter((r) => !watch.has(r.slug)).length,
-    live_size: live.length,
-    rows: board.map((row) => {
+  const rows: RadarRow[] = board.map((row) => {
       const cat = row.category ?? 'Uncategorised';
       const rankInCat = (catSeen.get(cat) ?? 0) + 1;
       catSeen.set(cat, rankInCat);
@@ -1130,7 +1237,20 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       farm_econ: row.farm_econ,
       farm_steps: row.farm_steps,
       };
-    }),
+    });
+  const ledger = buildLedger(snapshot, board, rows);
+  const radar: RadarData = {
+    as_of: snapshot.as_of,
+    source: snapshot.source,
+    floor_usd: snapshot.floor_usd,
+    model_version: MODEL_VERSION,
+    model_card: card,
+    watchlist_size: snapshot.watchlist.length,
+    board_size: board.length,
+    early_size: board.filter((r) => !watch.has(r.slug)).length,
+    live_size: live.length,
+    ledger,
+    rows,
     live,
   };
   return { board, radar };
