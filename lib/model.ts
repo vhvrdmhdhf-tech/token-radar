@@ -9,12 +9,12 @@
 // nearest comparable live protocols — its comps — in a standardised space of log TVL, seven-day
 // growth and log age, with category and chain-family agreement preferred. The comps are named on
 // the dashboard with their real TVL, market cap and cap/TVL ratio, so a reader can check the price
-// against the market's own record; transported to the target's own growth, age and size with the
+// against the market's own record; transported to the target's own growth and size with the
 // fitted slopes, their ratio spread is the row's bear-to-bull range. Two estimators are fitted and
 // cross-validated on the snapshot itself:
 //
 //   value  a regression: log10(mcap / TVL) per category (the category median, shrunk toward the
-//          global median), with slopes on growth, log age and log size fitted by least squares.
+//          global median), with slopes on growth and log size fitted by least squares.
 //   comps  the median transported ratio of the ten nearest live neighbours.
 //
 // The model card prints both held-out median errors and the blends between them: on this snapshot
@@ -31,6 +31,21 @@
 // repeated splits worse than the regression — so it is unchanged, and the card now prints the
 // repeated-split medians beside the slug-split figures for both halves, so no number on it rests
 // on one lucky split.
+//
+// Version 7 tests both halves out of time, and lets the test change the model. Random
+// half-splits can flatter a fit that only learned its own era: a radar prices launches that
+// have not happened yet, so each half is also fitted on protocols listed before a date and
+// tested on protocols listed after it, on two expanding windows (before 2024, before 2025).
+// The odds half survives the test unchanged — no reading beats the eight on both windows —
+// but the value half does not: the log-age slope, fitted on the old regime, prices the later
+// listings at ×7.1 and ×7.6 median error, against ×3.9 on random splits. Dropping the age
+// slope alone prices the same later listings at ×3.0 and ×3.0 while the random-split median
+// stays ×4.0, so the slope goes: the regression now corrects for growth and size only, and
+// the comps transport moves ratios by growth and size only. Age still places a protocol
+// among its nearest comparables — matching on age is not claiming age prices anything —
+// and the farm hold still runs on age. The card prints the walk-forward figures beside the
+// random-split ones for both halves, with the dated counts they rest on, so the out-of-time
+// test is on the record either way.
 //
 // Every figure derives from the snapshot's own as_of date, so two runs write the same bytes.
 
@@ -58,7 +73,7 @@ export interface Snapshot {
 }
 
 /** The model's version label: the dashboard names it and the board rows carry it. */
-export const MODEL_VERSION = 'radar-6-house-rule';
+export const MODEL_VERSION = 'radar-7-walkforward';
 
 /** How many live-token protocols the Live token view carries, by market cap. */
 export const LIVE_ROWS = 24;
@@ -142,7 +157,7 @@ export interface BoardRow {
   model: {
     peer_ratio: number;
     growth_factor: number;
-    age_factor: number;
+    size_factor: number;
     peers: number;
   };
   farm_steps: string[];
@@ -169,7 +184,7 @@ export interface RadarRow {
   readiness: number;
   peer_ratio: number;
   growth_factor: number;
-  age_factor: number;
+  size_factor: number;
   peers: number;
   watchlist: boolean;
   /** This row's place among the board's rows in its own category, and how many rows that is. */
@@ -210,7 +225,6 @@ export interface ModelCard {
   universe: number;
   global_ratio: number;
   growth_slope: number;
-  age_slope: number;
   holdout_median_error_x: number;
   holdout_within_2x_pct: number;
   holdout_within_5x_pct: number;
@@ -229,6 +243,26 @@ export interface ModelCard {
   odds_auc_repeated_median: number;
   odds_auc_repeated_q1: number;
   odds_auc_repeated_q3: number;
+  /** The walk-forward test: each half fitted on protocols listed before a date and tested on
+   * protocols listed after it, on two expanding windows (before 2024, before 2025). The value
+   * figure is the median of the two windows' median errors; the odds figure the median of the
+   * two windows' AUCs. Only protocols with a recorded start date can be placed in time
+   * (95 of the 128 live peers, 645 of the 758 protocols); the no-start-date odds reading is
+   * constant inside these sets, so the walk-forward odds fit effectively reads seven. The
+   * features are still read as of the snapshot's as_of date — the split key is the listing
+   * date, not a second snapshot — and the card states the dated counts the test rests on. */
+  value_error_walkforward_x: number;
+  value_error_walkforward_2024_x: number;
+  value_error_walkforward_2025_x: number;
+  walkforward_value_dated_n: number;
+  walkforward_value_test_2024_n: number;
+  walkforward_value_test_2025_n: number;
+  odds_auc_walkforward: number;
+  odds_auc_walkforward_2024: number;
+  odds_auc_walkforward_2025: number;
+  walkforward_odds_dated_n: number;
+  walkforward_odds_test_2024_n: number;
+  walkforward_odds_test_2025_n: number;
   odds_calibration: OddsBand[];
   base_rate_pct: number;
 }
@@ -381,10 +415,8 @@ export interface ValueFit {
   catPeers: Map<string, number>;
   globalLogRatio: number;
   growthSlope: number;
-  ageSlope: number;
   tvlSlope: number;
   meanGrowth: number;
-  meanLogAge: number;
   meanLogTvl: number;
   medianAge: number;
   medianGrowth: number;
@@ -422,9 +454,11 @@ export function fitValue(live: SnapshotProtocol[], asOf: string): ValueFit {
     catPeers.set(cat, arr.length);
   }
 
-  // Three slopes on the residuals the category medians leave: growth, then log age, then log TVL.
+  // Two slopes on the residuals the category medians leave: growth, then log TVL.
   // Each slope is fitted on winsorised residuals (5th to 95th percentile), so a handful of wild
-  // ratios cannot bend the line the other hundred peers vote for.
+  // ratios cannot bend the line the other hundred peers vote for. There is deliberately no
+  // log-age slope: the walk-forward test (see modelCard) votes it out — fitted on the old
+  // regime it prices later listings twice as badly, while growth and size carry forward.
   const winsor = (xs: number[]): number[] => {
     const s = [...xs].sort((a, b) => a - b);
     const lo = s[Math.floor(s.length / 20)]!;
@@ -435,34 +469,27 @@ export function fitValue(live: SnapshotProtocol[], asOf: string): ValueFit {
   const meanGrowth = mean(growths);
   const resid1 = rows.map((p, i) => logRatio[i]! - (catLogRatio.get(p.category ?? 'Uncategorised') ?? globalLogRatio));
   const growthSlope = slope(growths, winsor(resid1));
-  const logAges = ages.map((a) => Math.log10(Math.max(7, a)));
-  const meanLogAge = mean(logAges);
-  const resid2 = resid1.map((r, i) => r - growthSlope * (growths[i]! - meanGrowth));
-  const ageSlope = slope(logAges, winsor(resid2));
   const logTvls = rows.map((p) => Math.log10(p.tvl_usd));
   const meanLogTvl = mean(logTvls);
-  const resid3 = resid2.map((r, i) => r - ageSlope * (logAges[i]! - meanLogAge));
-  const tvlSlope = slope(logTvls, winsor(resid3));
+  const resid2 = resid1.map((r, i) => r - growthSlope * (growths[i]! - meanGrowth));
+  const tvlSlope = slope(logTvls, winsor(resid2));
 
-  return { catLogRatio, catPeers, globalLogRatio, growthSlope, ageSlope, tvlSlope, meanGrowth, meanLogAge, meanLogTvl, medianAge, medianGrowth };
+  return { catLogRatio, catPeers, globalLogRatio, growthSlope, tvlSlope, meanGrowth, meanLogTvl, medianAge, medianGrowth };
 }
 
 /** Price one pre-token protocol under a fitted value model: its launch value if the token listed. */
-export function priceProtocol(fit: ValueFit, p: SnapshotProtocol, asOf: string): { fdv: number; peerRatio: number; growthFactor: number; ageFactor: number; peers: number } {
+export function priceProtocol(fit: ValueFit, p: SnapshotProtocol, asOf: string): { fdv: number; peerRatio: number; growthFactor: number; sizeFactor: number; peers: number } {
   const cat = p.category ?? 'Uncategorised';
   const logRatio = fit.catLogRatio.get(cat) ?? fit.globalLogRatio;
   const growth = growthOf(p, fit.medianGrowth);
-  const age = ageDays(asOf, p.listed_at) ?? fit.medianAge;
-  const logAge = Math.log10(Math.max(7, age));
   const growthTerm = fit.growthSlope * (growth - fit.meanGrowth);
-  const ageTerm = fit.ageSlope * (logAge - fit.meanLogAge);
   const tvlTerm = fit.tvlSlope * (Math.log10(Math.max(1, p.tvl_usd)) - fit.meanLogTvl);
-  const fdv = p.tvl_usd * Math.pow(10, logRatio + growthTerm + ageTerm + tvlTerm);
+  const fdv = p.tvl_usd * Math.pow(10, logRatio + growthTerm + tvlTerm);
   return {
     fdv: clamp(fdv, 10_000, 1e12),
     peerRatio: round4(Math.pow(10, logRatio)),
     growthFactor: round4(Math.pow(10, growthTerm)),
-    ageFactor: round4(Math.pow(10, ageTerm + tvlTerm)),
+    sizeFactor: round4(Math.pow(10, tvlTerm)),
     peers: fit.catPeers.get(cat) ?? 0,
   };
 }
@@ -531,8 +558,9 @@ function quantile(xs: number[], q: number): number {
 /**
  * Match one protocol to its nearest live comparables and price it from them. Distance is
  * standardised over log TVL and log age (growth is left to the transport: a neighbour's ratio is
- * moved to the target's own growth, age and size with the regression's fitted slopes before any
- * median is taken, so a fast-growing neighbour is not misread as a rich one).
+ * moved to the target's own growth and size with the regression's fitted slopes before any
+ * median is taken, so a fast-growing neighbour is not misread as a rich one). Age places the
+ * neighbours; it does not price them — the walk-forward test votes the age slope out.
  */
 export function compsFor(fit: CompsFit, valueFit: ValueFit, p: SnapshotProtocol, asOf: string): CompsResult {
   const f = compFeatures(p, fit.medianGrowth, fit.medianAge, asOf);
@@ -555,7 +583,6 @@ export function compsFor(fit: CompsFit, valueFit: ValueFit, p: SnapshotProtocol,
     const adj =
       Math.log10(ratio) +
       valueFit.growthSlope * (f[1] - tf[1]) +
-      valueFit.ageSlope * (f[2] - tf[2]) +
       valueFit.tvlSlope * (f[0] - tf[0]);
     return {
       name: t.name,
@@ -571,7 +598,6 @@ export function compsFor(fit: CompsFit, valueFit: ValueFit, p: SnapshotProtocol,
   const adjLog = top.map(({ t, tf }) =>
     Math.log10(t.mcap_usd! / t.tvl_usd) +
     valueFit.growthSlope * (f[1] - tf[1]) +
-    valueFit.ageSlope * (f[2] - tf[2]) +
     valueFit.tvlSlope * (f[0] - tf[0]),
   );
   return {
@@ -815,6 +841,32 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     oddsSplitAucs.push(auc(splitScored));
   }
 
+  // The walk-forward test: fit on protocols listed before a cutoff, test on protocols listed
+  // after it, on two expanding windows. A random split can only say the fit describes its own
+  // era; a radar has to price the listings that come next, so this is the test that can change
+  // the model — and it did, voting the log-age slope out (see the version note at the top).
+  // Only dated protocols can be placed in time; the counts ride on the card with the figures.
+  const WALK_CUTS = ['2024-01-01', '2025-01-01'] as const;
+  const datedLive = live.filter((p) => p.listed_at !== null);
+  const datedUniverse = universe.filter((p) => p.listed_at !== null);
+  const wfValueErrors: number[] = [];
+  const wfOddsAucs: number[] = [];
+  const wfValueTestN: number[] = [];
+  const wfOddsTestN: number[] = [];
+  for (const cut of WALK_CUTS) {
+    const trainLive = datedLive.filter((p) => p.listed_at! < cut);
+    const testLive = datedLive.filter((p) => p.listed_at! >= cut);
+    const vfit = fitValue(trainLive, snapshot.as_of);
+    const verrs = testLive.map((p) => Math.abs(Math.log10(priceProtocol(vfit, p, snapshot.as_of).fdv / p.mcap_usd!)));
+    wfValueErrors.push(Math.pow(10, median(verrs)));
+    wfValueTestN.push(testLive.length);
+    const trainUni = datedUniverse.filter((p) => p.listed_at! < cut);
+    const testUni = datedUniverse.filter((p) => p.listed_at! >= cut);
+    const ofit = fitOdds(trainUni, snapshot.as_of);
+    wfOddsAucs.push(auc(testUni.map((p) => ({ score: tokenOdds(ofit, p, snapshot.as_of), label: isPreToken(p) ? 0 : 1 }))));
+    wfOddsTestN.push(testUni.length);
+  }
+
   // The calibration the model view draws: the held-out predictions in ten equal bands, each
   // band's mean prediction against the share of its protocols that really do record a token.
   const byScore = [...scored].sort((a, b) => a.score - b.score || 0);
@@ -840,7 +892,6 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     universe: snapshot.protocols.length,
     global_ratio: round4(Math.pow(10, valueFit.globalLogRatio)),
     growth_slope: round4(valueFit.growthSlope),
-    age_slope: round4(valueFit.ageSlope),
     holdout_median_error_x: round2(Math.pow(10, median(errors))),
     holdout_within_2x_pct: within(2),
     holdout_within_5x_pct: within(5),
@@ -854,6 +905,18 @@ export function modelCard(snapshot: Snapshot, valueFit: ValueFit, oddsFit: OddsF
     odds_auc_repeated_median: round4(median(oddsSplitAucs)),
     odds_auc_repeated_q1: round4(quartileOf(oddsSplitAucs, 1)),
     odds_auc_repeated_q3: round4(quartileOf(oddsSplitAucs, 3)),
+    value_error_walkforward_x: round2(median(wfValueErrors)),
+    value_error_walkforward_2024_x: round2(wfValueErrors[0]!),
+    value_error_walkforward_2025_x: round2(wfValueErrors[1]!),
+    walkforward_value_dated_n: datedLive.length,
+    walkforward_value_test_2024_n: wfValueTestN[0]!,
+    walkforward_value_test_2025_n: wfValueTestN[1]!,
+    odds_auc_walkforward: round4(median(wfOddsAucs)),
+    odds_auc_walkforward_2024: round4(wfOddsAucs[0]!),
+    odds_auc_walkforward_2025: round4(wfOddsAucs[1]!),
+    walkforward_odds_dated_n: datedUniverse.length,
+    walkforward_odds_test_2024_n: wfOddsTestN[0]!,
+    walkforward_odds_test_2025_n: wfOddsTestN[1]!,
     odds_calibration: calibration,
     base_rate_pct: round2((100 * snapshot.protocols.filter((p) => !isPreToken(p)).length) / Math.max(1, snapshot.protocols.length)),
   };
@@ -1170,7 +1233,7 @@ export function buildBoard(snapshot: Snapshot): BoardRow[] {
     model: {
       peer_ratio: s.peerRatio,
       growth_factor: s.growthFactor,
-      age_factor: s.ageFactor,
+      size_factor: s.sizeFactor,
       peers: s.peers,
     },
     farm_steps: farmSteps(s.p, s.age, s.econ),
@@ -1227,7 +1290,7 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       readiness: row.readiness,
       peer_ratio: row.model.peer_ratio,
       growth_factor: row.model.growth_factor,
-      age_factor: row.model.age_factor,
+      size_factor: row.model.size_factor,
       peers: row.model.peers,
       watchlist: watch.has(row.slug),
       cat_rank: rankInCat,
