@@ -13,16 +13,21 @@ plan.
 
 - **Comparables first.** Each pre-token protocol is matched to its ten nearest live comparables in a
   standardised space of TVL and age, same category and chain family preferred. Each comparable's
-  cap / TVL is adjusted to the target's own growth, age and size with fitted slopes; the set's median
+  cap / TVL is adjusted to the target's own growth and size with fitted slopes; the set's median
   is one price, and its middle half draws the row's bear–bull range. Every detail view names the
   comparables with their real TVL and market cap, so the evidence can be checked.
 - **A regression cross-check.** The median cap / TVL of the protocol's category (shrunk toward the
-  global median), corrected by least-squares slopes on growth, log age and size, prices the same
+  global median), corrected by least-squares slopes on growth and size, prices the same
   protocol independently. Both estimators are cross-fitted on the live set, and the dashboard's model
   card prints both held-out errors and the blend's: on the sealed snapshot the regression's median
-  error is ×3.42, the comparables' ×4.00, a 50/50 blend's ×4.20 — so the point estimate stays with
+  error is ×3.69, the comparables' ×4.10, a 50/50 blend's ×3.98 — so the point estimate stays with
   the regression and the comparables carry the evidence and the range. The choice is reported, not
-  hidden.
+  hidden. Both halves are also tested out of time — fitted on protocols listed before 2024 and
+  before 2025, tested on what listed after — and that test changed the value half: a log-age slope
+  priced the later listings at ×7.1 and ×7.6, so it is gone; without it the same later listings
+  price at ×3.05 and ×3.04 while the random-split median stays ×3.96. The odds half survives the
+  test unchanged (AUC 0.64 and 0.63 out of time, against 0.75 on random splits) — no reading beat
+  the eight on both windows.
 - **Token odds and tiers.** A logistic model over the whole universe (the label is whether a protocol
   records a token) on log TVL, log age, growth, the category's token record, chain count, an
   Ethereum flag, a Solana flag and a no-recorded-start-date flag; its held-out calibration is printed
@@ -63,15 +68,15 @@ directory. Two runs on the same snapshot write the same bytes.
 - `screenshots/` — the board, a protocol's detail view, a tier-filtered view
 - `vendor/makefun-board.ts` — the competition's dossier library, vendored byte for byte
 
-Model version `radar-6-house-rule`: the coverage release. The board now applies the house rule
-that built the watchlist to every row, not just above the floor — v4 ranked 39 bridges, liquid
-staking receipts and staked products below the floor as launches, and this release leaves all of
-them out, ranks the 20 above-floor protocols the list leaves out instead, and shows the whole
-758-protocol accounting on the cover. The value and odds halves are the validation release's,
-unchanged — gradient-boosted trees, median-loss fits, blends and re-tuned shrinkage were all fitted
-and priced twenty repeated splits worse than its regression. The odds half gains two readings
-(Solana deployment, no recorded start date) that won their place on the same repeated splits, and
-the model card now prints repeated-split medians beside the single-split figures for both halves.
+Model version `radar-7-walkforward`: the out-of-time release. Both halves are now fitted on
+protocols listed before a date and tested on protocols listed after it, on two expanding windows,
+and the card prints those figures beside the random-split ones. The test changed the value half:
+a log-age slope priced the later listings at ×7.1 and ×7.6, so it is gone — the regression
+corrects for growth and size only, and the comparables' ratios are transported by growth and size
+only, while age still places a protocol among its nearest comparables. The odds half survives the
+test unchanged: no reading beat the eight on both windows. The coverage release's board is
+unchanged — the house rule still applies to every row, the 20 above-floor protocols the list
+leaves out are still ranked, and the whole 758-protocol accounting is still on the cover.
 
 An entry to make.fun's [Build the best token launch radar](https://make.fun/bounty/token-radar-01)
 bounty ($1,325), built by an AI agent. Found via [make.fun](https://make.fun/r/zac67q6r?ref=zac67q6r).
