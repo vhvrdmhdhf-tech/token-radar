@@ -152,7 +152,7 @@ function showDetail(slug) {
     ['TVL today', usd(r.tvl_usd), 'the protocol\'s own figure from the snapshot'],
     [`× peer ratio ${r.peer_ratio}`, usd(base), `what the market pays per TVL dollar in ${r.category ?? 'its category'} (${r.peers} live peers)`],
     [`× growth factor ${r.growth_factor}`, usd(grown), 'its seven-day TVL trend, against the live set\'s'],
-    [`× age & size factor ${r.age_factor}`, usd(r.fdv_usd), 'how long it has run with no token, and its size'],
+    [`× size factor ${r.size_factor}`, usd(r.fdv_usd), 'its size against the live set\'s — age places its comparables, it does not price them'],
     [`× token odds ${pct(r.token_odds)}`, usd(r.implied_value_usd), 'the fitted chance a protocol like this ever lists'],
   ];
   const lo = Math.log10(Math.max(1, r.fdv_bear_usd * 0.8));
@@ -243,7 +243,7 @@ $('model-body').innerHTML = `
       <p>Each pre-token protocol is matched to its ten nearest live comparables in a standardised space
       of TVL and age, with the same category and chain family preferred. A comparable's market cap per
       TVL dollar is a price the market has already set; before the set is read, each ratio is adjusted
-      to the target's own seven-day growth, age and size with fitted slopes, so a fast-growing or much
+      to the target's own seven-day growth and size with fitted slopes, so a fast-growing or much
       larger neighbour is not misread. The comparables' median prices the protocol one way; their
       middle half — the 25th to 75th percentile — draws its bear-to-bull range. Every row's detail view
       names its comparables with their real TVL and market cap, so the evidence can be checked against
@@ -253,19 +253,29 @@ $('model-body').innerHTML = `
       <h3>2 · The second estimator, and the blend test</h3>
       <p>A regression prices the same protocol independently: the median cap / TVL of its category
       (shrunk toward the global median of ×${mc.global_ratio}), corrected by least-squares slopes on
-      growth (${mc.growth_slope}), log age (${mc.age_slope}) and size. Both estimators were cross-fitted
+      growth (${mc.growth_slope}) and size. Both estimators were cross-fitted
       on the live set — each half priced by a model fitted only on the other half:</p>
       <div class="fact"><span class="k">Regression — held-out median error</span><span class="v">×${mc.holdout_median_error_x}</span></div>
       <div class="fact"><span class="k">Comparables — held-out median error</span><span class="v">×${mc.comps_median_error_x}</span></div>
       <div class="fact"><span class="k">50 / 50 blend — held-out median error</span><span class="v">×${mc.blend_median_error_x}</span></div>
       <div class="fact"><span class="k">Within 2× of the real cap — comparables / regression</span><span class="v">${mc.comps_within_2x_pct}% / ${mc.holdout_within_2x_pct}%</span></div>
       <div class="fact"><span class="k">Regression — median error, 20 repeated splits</span><span class="v">×${mc.value_error_repeated_median_x} (middle half ×${mc.value_error_repeated_q1_x}–×${mc.value_error_repeated_q3_x})</span></div>
+      <div class="fact"><span class="k">Regression — median error, walk-forward</span><span class="v">×${mc.value_error_walkforward_x} (before 2024: ×${mc.value_error_walkforward_2024_x}, n=${mc.walkforward_value_test_2024_n}; before 2025: ×${mc.value_error_walkforward_2025_x}, n=${mc.walkforward_value_test_2025_n})</span></div>
       <p>The comparables land within 2× more often, but their misses are larger, and every blend tested
       priced the held-out half worse than the regression alone. So the point estimate stays with the
       regression, and the comparables carry what they are best at: named evidence and an honest range.
       The regression itself was re-challenged on the repeated splits — gradient-boosted trees,
       median-loss fits and re-tuned shrinkage all priced them worse — and stayed. The model card
       prints the figures either way — the choice is reported, not hidden.</p>
+      <p>A random split only says a fit describes its own era, and a radar has to price the listings
+      that come next. So both halves are also fitted on protocols listed before a date and tested on
+      protocols listed after it, on two expanding windows; only the ${mc.walkforward_value_dated_n} live
+      peers with a recorded start date can be placed in time. That test changed this model: with a
+      log-age slope the regression priced the later listings at ×7.1 and ×7.6, against ×3.9 on random
+      splits. Dropping the slope alone prices the same later listings at ×${mc.value_error_walkforward_2024_x} and ×${mc.value_error_walkforward_2025_x} while the
+      random-split median stays ×${mc.value_error_repeated_median_x}, so the slope is gone — the regression corrects for growth and
+      size only, and the comparables' ratios are transported by growth and size only. Age still places
+      a protocol among its nearest comparables; it does not price it.</p>
     </div>
     <div class="card">
       <h3>3 · Token odds and readiness tiers</h3>
@@ -278,6 +288,12 @@ $('model-body').innerHTML = `
       splits of the universe its median AUC is ${mc.odds_auc_repeated_median} (middle half
       ${mc.odds_auc_repeated_q1}–${mc.odds_auc_repeated_q3}), and the two newest readings earned their
       place on those splits: the six-reading fit they extend scored lower on every one of the twenty.
+      Out of time — fitted on protocols listed before 2024 and before 2025, tested on what listed
+      after — its AUC is ${mc.odds_auc_walkforward_2024} and ${mc.odds_auc_walkforward_2025} (median
+      ${mc.odds_auc_walkforward}), on the ${mc.walkforward_odds_dated_n} dated protocols of the
+      universe; the no-start-date reading is constant inside those sets, so the walk-forward fit
+      effectively reads seven. The later listings are harder to separate than a random half, and the
+      card prints that too — no reading beat the eight on both windows, so the eight stay.
       Readiness nudges those odds
       by the protocol's own seven-day TVL momentum and sorts the board into three tiers — Imminent
       (50%+), Emerging (30–50%) and Early (under 30%) — so a reader farms in launch order, not just
